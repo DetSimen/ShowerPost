@@ -118,8 +118,9 @@ int8_t    CurrTemperature = INVALID_TEMPERATURE; // последняя изме�
 int16_t   CurrentTimerValue = 0;
 bool      SoftTimerRun = false;
 volatile bool Flashing = false;
-char      TimerDigits[5];
-int8_t      CurrentDigits;
+char      TimerDigits[]="0000";
+int8_t    CurrentDigitIdx = 3;
+TDateTime SaveTime;
 
 bool SetupMode = false;
 
@@ -190,9 +191,7 @@ void SetDisplayState(const TDisplayState ANewState)
 //
 void Display(void)
 {
-    Disp.Clear();
     
-    if (SetupMode && Flashing) return;
 
     switch (DisplayState) // и в зависимости от текущего состояния
     {
@@ -206,10 +205,15 @@ void Display(void)
         break;
 
     case TDisplayState::Timer: {
-        memset(TimerDigits, '0', 5);
-        sprintf(TimerDigits, "%04u", CurrentTimerValue);
-        Disp.Print(TimerDigits);
-        if (Flashing) Disp.PrintAt(3, ' ');
+        if (!SetupMode) {
+            memset(TimerDigits, '0', 5);
+            sprintf(TimerDigits, "%04u", CurrentTimerValue);
+            Disp.Print(CurrentTimerValue);
+        }
+        else {
+            Disp.Print(TimerDigits);
+            if (Flashing) Disp.PrintAt(CurrentDigitIdx, ' ');
+        }
     }
 
     default:
@@ -226,6 +230,15 @@ void Beep(const uint16_t ABeepTime)
 
 void OnLeftButtonPress()
 {
+    if (SetupMode) {
+        if (CurrentDigitIdx > 0)
+            CurrentDigitIdx--;
+        else
+            CurrentDigitIdx = 3;
+        Display();
+        return;
+    }
+
     const uint8_t DUMB_VALUE = static_cast<uint8_t>(TDisplayState::Dumb);
 
     uint8_t dispState = static_cast<uint8_t>(DisplayState);
@@ -238,12 +251,24 @@ void OnLeftButtonPress()
 }
 
 void OnLeftLongButton(void) {
-    SetupMode = !SetupMode;
+    if (DisplayState!=TDisplayState::Temp) SetupMode = !SetupMode;
+    Flashing = !SetupMode;
+    Display();
 }
 
 void OnLeftRotary(const int8_t AStep)
 {
-    if (SetupMode) Display();
+    if (SetupMode) {
+        if (DisplayState == TDisplayState::Timer) {
+            char ch = TimerDigits[CurrentDigitIdx];
+             ch += AStep;
+             if (ch < '0') ch = '0';
+             if (ch > '9') ch = '9';
+             TimerDigits[CurrentDigitIdx] = ch;
+             CurrentTimerValue = atoi(TimerDigits);
+        }
+        Display();
+    }
 }
 
 
