@@ -55,7 +55,7 @@ THandle hTimerAlive = INVALID_HANDLE;           // Таймер светодио
 //
 constexpr uint32_t COLON_FLASH_TIME = 500;      // время мигания двоеточия, 500мс
 
-enum class TDisplayState: uint8_t {Unknown, Time=1, Temp=2, Timer=3}; // состояния отображения, время,температура,таймер
+enum class TDisplayState: uint8_t {Unknown, Time=1, Temp=2, Timer=3, Dumb}; // состояния отображения, время,температура,таймер
 
 TDisplayState DisplayState = TDisplayState::Unknown; // первоначальное состояние не определено
 void SetDisplayState(const TDisplayState ANewState); // функция смены состояния отображения
@@ -190,6 +190,10 @@ void SetDisplayState(const TDisplayState ANewState)
 //
 void Display(void)
 {
+    Disp.Clear();
+    
+    if (SetupMode && Flashing) return;
+
     switch (DisplayState) // и в зависимости от текущего состояния
     {
     case TDisplayState::Time:       // выведем либо время
@@ -222,12 +226,15 @@ void Beep(const uint16_t ABeepTime)
 
 void OnLeftButtonPress()
 {
-    uint8_t dispstate = static_cast<uint8_t>(DisplayState);
+    const uint8_t DUMB_VALUE = static_cast<uint8_t>(TDisplayState::Dumb);
 
-    if (++dispstate > 3) dispstate = 1;
+    uint8_t dispState = static_cast<uint8_t>(DisplayState);
 
-    TDisplayState newds = static_cast<TDisplayState>(dispstate);
-    SetDisplayState(newds);
+    if (++dispState == DUMB_VALUE) dispState = 1;
+
+    TDisplayState newDispState = static_cast<TDisplayState>(dispState);
+    
+    SetDisplayState(newDispState);
 }
 
 void OnLeftLongButton(void) {
@@ -236,10 +243,7 @@ void OnLeftLongButton(void) {
 
 void OnLeftRotary(const int8_t AStep)
 {
-    CurrentTimerValue += AStep;
-    if (CurrentTimerValue < 0) CurrentTimerValue = 0;
-    if (CurrentTimerValue > 9999) CurrentTimerValue = 9999;
-    Display();
+    if (SetupMode) Display();
 }
 
 
@@ -272,7 +276,10 @@ void Dispatch(const TMessage& Msg) {
             if (DisplayState == TDisplayState::Time)
                 Disp.ToggleColon(); // если это таймер двоеточия, 
                                     // переключаем двоеточие on/off
-            if (SetupMode) Flashing = !Flashing;
+            if (SetupMode) {
+                Flashing = !Flashing;
+                Display();
+            }
         }
 
 
