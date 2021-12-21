@@ -197,6 +197,7 @@ void Display(void)
     {
     case TDisplayState::Time:       // выведем либо время
         Disp.PrintTime(Clock.GetHour(), Clock.GetMinute()); //которое возьмём из RTC
+        if (SetupMode && Flashing) Disp.Clear();
         break;
 
     case TDisplayState::Temp:       // либо температуру
@@ -204,7 +205,7 @@ void Display(void)
         Disp.PrintDeg(CurrTemperature); // выведем из глоб. переменной температуру
         break;
 
-    case TDisplayState::Timer: {
+    case TDisplayState::Timer: { 
         if (!SetupMode) {
             memset(TimerDigits, '0', 5);
             sprintf(TimerDigits, "%04u", CurrentTimerValue);
@@ -228,17 +229,7 @@ void Beep(const uint16_t ABeepTime)
     Beeper.On();
 }
 
-void OnLeftButtonPress()
-{
-    if (SetupMode) {
-        if (CurrentDigitIdx > 0)
-            CurrentDigitIdx--;
-        else
-            CurrentDigitIdx = 3;
-        Display();
-        return;
-    }
-
+void SwitchToNextDisplayMode(void) {
     const uint8_t DUMB_VALUE = static_cast<uint8_t>(TDisplayState::Dumb);
 
     uint8_t dispState = static_cast<uint8_t>(DisplayState);
@@ -246,8 +237,21 @@ void OnLeftButtonPress()
     if (++dispState == DUMB_VALUE) dispState = 1;
 
     TDisplayState newDispState = static_cast<TDisplayState>(dispState);
-    
+
     SetDisplayState(newDispState);
+}
+
+void OnLeftButtonPress()
+{
+    if (!SetupMode) 
+        SwitchToNextDisplayMode();
+    else {
+        if (CurrentDigitIdx > 0)
+            CurrentDigitIdx--;
+        else
+            CurrentDigitIdx = 3;
+    }
+    Display();
 }
 
 void OnLeftLongButton(void) {
