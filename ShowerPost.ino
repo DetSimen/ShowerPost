@@ -5,9 +5,12 @@
 */
 #include <Wire.h>
 #include <Arduino.h>
+#include <bme280_defs.h>
+#include <BME280.h>
 #include "src\Messages.h" 
 #include "src\DEF_Message.h"
 #include "src\HardTimers.h"
+#include "src\AnalogSensor.h"
 #include "src\TLed.h"
 #include "src\TM1637.h"
 #include "src\DS18B20.h"
@@ -34,8 +37,9 @@ constexpr uint8_t PIN_LEFT_ENCODER_RIGHT    = 3;    // кнопка направ
 
 
 
-constexpr uint16_t msg_SoftTimerStart = 0x110;
-constexpr uint16_t msg_SoftTimerEnds = 0x111;
+constexpr uint16_t msg_SoftTimerStart   = 0x110;
+constexpr uint16_t msg_SoftTimerEnds    = 0x111;
+constexpr uint16_t msg_DisplayChange    = 0x112;  // сменить информацию на дисплее
 
 //-----------------------------------------------------------------------------------------
 //
@@ -88,9 +92,6 @@ TDS3231 Clock;  //  объект часов реального времени
 
 TEncoder    LeftEncoder(PIN_LEFT_ENCODER_LEFT, PIN_LEFT_ENCODER_RIGHT, PIN_LEFT_ENCODER_BUTTON);
 
-void OnLeftButtonPress();
-void OnLeftRotary(const int8_t AStep);
-void OnLeftLongButton(void);
 
 // ---------------------------------------------------------------------------------------
 //
@@ -107,6 +108,32 @@ THandle     hTimerBeeper;
 
 void    Beep(const uint16_t ABeepTime = BEEP_BUTTON_TIME);
 
+//  ---------------------------------------------------------------------------------------
+//
+//  Блок Таймера 
+//
+constexpr int16_t   MIN_TIMER_VALUE     = 0;
+constexpr int16_t   MAX_TIMER_VALUE     = 9999;
+constexpr char      MIN_DIGIT_CHAR      = '0';
+constexpr char      MAX_DIGIT_CHAR      = '9';
+
+enum class TSoftTimerState: uint8_t {Unknown=0, Stop, Run, Paused};
+TSoftTimerState SoftTimerState = TSoftTimerState::Unknown;
+
+void SetTimerState(const TSoftTimerState ANewState);
+
+int16_t   CurrentTimerValue = 0;
+bool      SoftTimerRun = false;
+char      TimerDigits[] = "0000";
+int8_t    CurrentDigitIdx = 0;
+
+
+// ----------------------------------------------------------------------------------------
+//
+//  Галетный переключатель
+//
+
+TAnalogSensor GalletSwitch(A0, true);
 
 
 //-----------------------------------------------------------------------------------------
@@ -115,14 +142,10 @@ void    Beep(const uint16_t ABeepTime = BEEP_BUTTON_TIME);
 //
 
 int8_t    CurrTemperature = INVALID_TEMPERATURE; // последняя измеренная температура
-int16_t   CurrentTimerValue = 0;
-bool      SoftTimerRun = false;
-volatile bool Flashing = false;
-char      TimerDigits[]="0000";
-int8_t    CurrentDigitIdx = 3;
-TDateTime SaveTime;
+//bool Flashing = false;
+//TDateTime SaveTime;
 
-bool SetupMode = false;
+bool SettingMode = false;
 
 
 //-----------------------------------------------------------------------------------------
@@ -156,6 +179,8 @@ void setup() {                                  // начальные настр
 
     SetDisplayState(TDisplayState::Time); // первоначально устанавливаем отображение времени
 
+    GalletSwitch.SetReadInterval(1000);
+    GalletSwitch.SetGap(10);
 
 //    Clock.SetTime(__TIME__);  // первоначальная настройка часов
 
@@ -166,6 +191,8 @@ void loop() {                   // бесконечный цикл
 
     LeftEncoder.Read();
 
+    GalletSwitch.Read();
+
     TempSensor.Read();          // и устройства
                                 // и при получении от них сообщения
                                 // передаём его в функцию диспетчера
@@ -174,15 +201,14 @@ void loop() {                   // бесконечный цикл
     if (MessageList.Available()) Dispatch(MessageList.GetMessage());
 }
 
-
-
 //
 //  функция смены того, что мы будем отображать на дисплее
 //
 void SetDisplayState(const TDisplayState ANewState)
 {
     if (DisplayState == ANewState) return;  // если состояние не поменялось - ничего делать не надо
-    DisplayState = ANewState;               // иначе запомним новое состояние 
+    DisplayState = ANewState;               // иначе запомним новое состояние
+
     Display();                              // и вызовем функцию отображения
 }
 
@@ -191,13 +217,10 @@ void SetDisplayState(const TDisplayState ANewState)
 //
 void Display(void)
 {
-    
-
     switch (DisplayState) // и в зависимости от текущего состояния
     {
     case TDisplayState::Time:       // выведем либо время
         Disp.PrintTime(Clock.GetHour(), Clock.GetMinute()); //которое возьмём из RTC
-        if (SetupMode && Flashing) Disp.Clear();
         break;
 
     case TDisplayState::Temp:       // либо температуру
@@ -206,15 +229,7 @@ void Display(void)
         break;
 
     case TDisplayState::Timer: { 
-        if (!SetupMode) {
-            memset(TimerDigits, '0', 5);
-            sprintf(TimerDigits, "%04u", CurrentTimerValue);
-            Disp.Print(CurrentTimerValue);
-        }
-        else {
-            Disp.Print(TimerDigits);
-            if (Flashing) Disp.PrintAt(CurrentDigitIdx, ' ');
-        }
+        Disp.Print(CurrentTimerValue);
     }
 
     default:
@@ -226,7 +241,14 @@ void Beep(const uint16_t ABeepTime)
 {
     Timers.SetNewInterval(hTimerBeeper, ABeepTime);
     Timers.Reset(hTimerBeeper);
+    puts("Beep");
     Beeper.On();
+}
+
+void SetTimerState(const TSoftTimerState ANewState)
+{
+    if (SoftTimerState == ANewState) return;
+    SoftTimerState = ANewState;
 }
 
 void SwitchToNextDisplayMode(void) {
@@ -240,41 +262,6 @@ void SwitchToNextDisplayMode(void) {
 
     SetDisplayState(newDispState);
 }
-
-void OnLeftButtonPress()
-{
-    if (!SetupMode) 
-        SwitchToNextDisplayMode();
-    else {
-        if (CurrentDigitIdx > 0)
-            CurrentDigitIdx--;
-        else
-            CurrentDigitIdx = 3;
-    }
-    Display();
-}
-
-void OnLeftLongButton(void) {
-    if (DisplayState!=TDisplayState::Temp) SetupMode = !SetupMode;
-    Flashing = !SetupMode;
-    Display();
-}
-
-void OnLeftRotary(const int8_t AStep)
-{
-    if (SetupMode) {
-        if (DisplayState == TDisplayState::Timer) {
-            char ch = TimerDigits[CurrentDigitIdx];
-             ch += AStep;
-             if (ch < '0') ch = '0';
-             if (ch > '9') ch = '9';
-             TimerDigits[CurrentDigitIdx] = ch;
-             CurrentTimerValue = atoi(TimerDigits);
-        }
-        Display();
-    }
-}
-
 
 //
 // Главная функция диспетчер, сюда стекаются все сообщения 
@@ -305,10 +292,6 @@ void Dispatch(const TMessage& Msg) {
             if (DisplayState == TDisplayState::Time)
                 Disp.ToggleColon(); // если это таймер двоеточия, 
                                     // переключаем двоеточие on/off
-            if (SetupMode) {
-                Flashing = !Flashing;
-                Display();
-            }
         }
 
 
@@ -337,61 +320,40 @@ void Dispatch(const TMessage& Msg) {
     }
 
     case msg_EncoderBtnPress: {
-        if (Msg.Sender == LeftEncoder) {
+        if (!SettingMode) {
             Beep();
-            OnLeftButtonPress();
+            puts("Encoder Button");            
+            SendMessage(msg_DisplayChange);
         }
         break;
     }
 
     case msg_EncoderLeft:
     case msg_EncoderRight: {
-        if (DisplayState == TDisplayState::Timer) {
-            if (!SoftTimerRun) {
-                int8_t step = (Msg.Message == msg_EncoderRight) ? 1 : -1;
-                Beep(BEEP_CHIRP_TIME);
-                OnLeftRotary(step);
-            }
-        }
+        if (Msg.Message == msg_EncoderLeft)
+            puts("Encoder Left");
+        else
+            puts("Encoder Right");
         break;
     }
 
-
-    case msg_SoftTimerStart:
-        Disp.Clear();
-        SoftTimerRun = true;
-        Flashing = true;
-        break;
-
-    case msg_SoftTimerEnds:
-        SoftTimerRun = false;
-        Flashing = false;
-//        CurrentTimerValue = 0;
-        if (CurrentTimerValue == 0) {
-            SetDisplayState(TDisplayState::Time);
-            Beep(1000);
-        }
-        else {
-            Disp.Print(CurrentTimerValue);
-        }
-        break;
-
     case msg_EncoderBtnLong:
-        OnLeftLongButton();
+        puts("Button Long");
         break;
 
-    case msg_SecondsChanged: 
-        if (SoftTimerRun) {
-            if (CurrentTimerValue > 0)
-                CurrentTimerValue--;
-            else
-                SendMessage(msg_SoftTimerEnds);
+    case msg_DisplayChange: {
+        puts("NextDisplayMode");
+        break;
+    }
 
-            if (DisplayState==TDisplayState::Timer) Display();
-        }
+    case msg_SecondsChanged:
         break;
 
     case msg_DateChanged:
+        break;
+
+    case msg_SensorValueChanged:
+        Serial.println(GalletSwitch.GetValue());
         break;
 
     default: // если мы пропустили какое сообщение, этот блок выведет в сериал его номер
