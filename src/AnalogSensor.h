@@ -37,6 +37,7 @@ static 	uint16_t readAnalogPin(const uint8_t APin) {
 	}
 
 void init(void) override {
+	FInitNeed = false;
 	internalRead();
 	}
 
