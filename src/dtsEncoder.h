@@ -34,8 +34,8 @@ protected:
 
     void init(void) override {
         FInitNeed = false;
-        pinMode(FPinA, INPUT);
-        pinMode(FPinB, INPUT);
+        pinMode(FPinA, INPUT_PULLUP);
+        pinMode(FPinB, INPUT_PULLUP);
         pinMode(FPin,  INPUT_PULLUP);
     }
 
@@ -98,8 +98,8 @@ protected:
         }
 
         if (enableOut) {
-            if (lastKey == key_Left) SendMessage(msg_EncoderLeft);
-            if (lastKey == key_Right) SendMessage(msg_EncoderRight);
+            if (lastKey == key_Left) PostMessage(msg_EncoderLeft);
+            if (lastKey == key_Right) PostMessage(msg_EncoderRight);
         }
     }
 
