@@ -66,6 +66,11 @@ constexpr uint16_t msg_ClockNextFlash   = 0x124;
 constexpr uint16_t msg_LeftEncoderMove  = 0x125;
 constexpr uint16_t msg_RightEncoderMove = 0x126;
 constexpr uint16_t msg_NextHeatState    = 0x127;
+constexpr uint16_t msg_HeatSetupEnter   = 0x128;
+constexpr uint16_t msg_HeatSetupExit    = 0x129;
+constexpr uint16_t msg_NextFlashIndex   = 0x12A;
+constexpr uint16_t msg_SetMaxTemp       = 0x12B;
+constexpr uint16_t msg_SetTimer         = 0x12C;
 
 /// -------------------------------------------------------------------------------------
 ///
@@ -251,6 +256,7 @@ bool    SetupMode   = false;
 //
 void Dispatch(const TMessage& Msg);  // функция обработки сообщений, прототип
 void Stop(void);
+void DisplayTimer(const uint16_t AValue);
 
 
 #pragma endregion
@@ -355,13 +361,26 @@ void Display() {
     case TAppState::Heat: {
         if (HeaterMode == THeaterMode::Temp) Disp.PrintDeg(CurrentTemperature);
         if (HeaterMode == THeaterMode::MaxTemp) Disp.PrintDeg(MaxTemperature);
-        if (HeaterMode == THeaterMode::Timer) Disp.Print(TimerCurrentValue);
+        if (HeaterMode == THeaterMode::Timer) DisplayTimer(TimerCurrentValue);
+        Disp.ShowPoint(HeaterMode == THeaterMode::MaxTemp);
+        if (SetupMode && Flashing) {
+            if (FlashIndex < 0)
+                Disp.Clear();
+            else
+                Disp.PrintAt(FlashIndex, SPACE_SYMBOL);
+        }
         break;
     }
     default:
         break;
     }
 
+}
+
+void DisplayTimer(const uint16_t AValue) {
+    char buf[5];
+    sprintf(buf, "%04d", AValue);
+    Disp.Print(buf);
 }
 
 void DisplayModeName(TAppState AState) {
@@ -494,8 +513,8 @@ void Dispatch(const TMessage& Msg) {
 
             if ((AppState == TAppState::Clock) && (!ShowModeName))
                 Disp.ToggleColon();
-            else
-                Disp.ShowPoint(false);
+//            else
+//                Disp.ShowPoint(false);
 
             if (SetupMode) Display();
         }
@@ -529,7 +548,7 @@ void Dispatch(const TMessage& Msg) {
     case msg_SensorValueChanged: {
         if (Msg.Sender == GalletSwitch) {
             int16_t gValue = GetGalletIndex(Msg.LoParam);
-            SendMessage(msg_GalletGhanged, gValue);
+            if (gValue>=0) SendMessage(msg_GalletGhanged, gValue);
         }
         break;
     }
@@ -565,10 +584,11 @@ void Dispatch(const TMessage& Msg) {
     }
 
     case msg_EncoderLeft:
-    case msg_EncoderRight:
+    case msg_EncoderRight: {
         if (Msg.Sender == LeftEncoder) SendMessage(msg_LeftEncoderMove, Msg.LoParam);
         if (Msg.Sender == RightEncoder) SendMessage(msg_RightEncoderMove, Msg.LoParam);
         break;
+    }
 
     case msg_LeftEncoderLong: {
         if (AppState == TAppState::Clock) {
@@ -596,7 +616,11 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_RightEncoderClick: {
         if (AppState == TAppState::Heat) {
-            if(!SetupMode) SendMessage(msg_NextHeatState);
+            if (Timers.isActive(hTimerTimeOut)) Timers.Reset(hTimerTimeOut);
+            if (SetupMode)
+                SendMessage(msg_NextFlashIndex);
+            else
+                SendMessage(msg_NextHeatState);
         }
         break;
     }
@@ -609,6 +633,13 @@ void Dispatch(const TMessage& Msg) {
             HeaterMode = static_cast<THeaterMode>(curr);
             Display();
         
+        break;
+    }
+
+    case msg_NextFlashIndex: {
+        if (SetupMode && HeaterMode == THeaterMode::Timer) FlashIndex++;
+        if (FlashIndex > 3) FlashIndex = -1;
+        Display();
         break;
     }
 
@@ -645,6 +676,75 @@ void Dispatch(const TMessage& Msg) {
         SetupMode = false;
         Timers.Stop(hTimerTimeOut);
         Display();
+        break;
+    }
+
+    case msg_RightEncoderMove: {
+        if (Timers.isActive(hTimerTimeOut)) Timers.Reset(hTimerTimeOut);
+        if (SetupMode) {
+            if (HeaterMode == THeaterMode::MaxTemp) SendMessage(msg_SetMaxTemp, Msg.LoParam);
+            if (HeaterMode == THeaterMode::Timer) SendMessage(msg_SetTimer, Msg.LoParam);
+        }
+        break;
+    }
+
+    case msg_RightEncoderLong: {
+        if (AppState == TAppState::Heat) {
+            if (SetupMode)
+                SendMessage(msg_HeatSetupExit);
+            else
+                SendMessage(msg_HeatSetupEnter);
+        }
+        break;
+    }
+
+    case msg_HeatSetupEnter: {
+        if (HeaterMode == THeaterMode::Temp) break;
+        SetupMode = true;
+        FlashIndex = -1;
+        Timers.SetNewInterval(hTimerTimeOut, SETUP_TIMEOUT);
+        Display();
+        break;
+    }
+
+    case msg_HeatSetupExit: {
+        SetupMode = false;
+        puts("Heat Setup Exit");
+        Display();
+        break;
+    }
+
+    case msg_SetMaxTemp: {
+        int8_t step = Msg.LoParam;
+        MaxTemperature += step;
+        if (MaxTemperature > ABSOLUTE_MAX_TEMP) MaxTemperature = ABSOLUTE_MAX_TEMP;
+        if (MaxTemperature < ABSOLUTE_MIN_TEMP) MaxTemperature = ABSOLUTE_MIN_TEMP;
+        Display();
+        break;
+    }
+
+    case msg_SetTimer: {
+        int8_t step = Msg.LoParam;
+        int16_t value = TimerCurrentValue;
+        char  buf[5];
+        sprintf(buf, "%04d", value);
+        if (FlashIndex < 0) {
+            value += step;
+            if (value < 0) value = 0;;
+            if (value > MAX_TIMER_VALUE) value = MAX_TIMER_VALUE;
+        } 
+        else {
+            char ch = buf[FlashIndex];
+            ch += step;
+            if (ch < '0') ch = '9';
+            if (ch > '9') ch = '0';
+            buf[FlashIndex] = ch;
+            value = atoi(buf);
+        }
+
+        TimerCurrentValue = value;
+        Display();
+
         break;
     }
 
