@@ -9,16 +9,17 @@
 class TEncoder : public TDigitalSensor {
 protected:
 
-    static constexpr uint16_t LONG_PRESS_TIME = 800; //ms
+    static constexpr uint16_t LONG_PRESS_TIME   = 800; //ms
+    static constexpr int16_t  ENCODER_STEP      = 1;
 
-    static constexpr uint8_t BUTTON_BIT   = 0x07;
-    static constexpr uint8_t PIN_A_BIT    = 0x01;
-    static constexpr uint8_t PIN_B_BIT    = 0x00;
+    static constexpr uint8_t BUTTON_BIT         = 0x07;
+    static constexpr uint8_t PIN_A_BIT          = 0x01;
+    static constexpr uint8_t PIN_B_BIT          = 0x00;
 
-    static constexpr uint8_t key_None   = 0x00;
-    static constexpr uint8_t key_Left   = 0x01;
-    static constexpr uint8_t key_Right  = 0x02;
-    static constexpr uint8_t key_Both   = 0x03;
+    static constexpr uint8_t key_None           = 0x00;
+    static constexpr uint8_t key_Left           = 0x01;
+    static constexpr uint8_t key_Right          = 0x02;
+    static constexpr uint8_t key_Both           = 0x03;
 protected:
     uint8_t FPinA;
     uint8_t FPinB;
@@ -58,7 +59,7 @@ protected:
         else {
             uint16_t now = uint16_t(millis());
             if (now - FButtonPressTime > LONG_PRESS_TIME) {
-                PostMessage(msg_EncoderBtnLong);
+                PostMessage(msg_EncoderLong);
                 FButtonPressTime = now;
                 FLongPress = true;
             }
@@ -69,7 +70,7 @@ protected:
         if (FButtonPressTime == 0) return;
         FButtonPressTime = 0;
 
-        if (!FLongPress) PostMessage(msg_EncoderBtnPress);
+        if (!FLongPress) PostMessage(msg_EncoderClick);
             
         FLongPress = false;
     }
@@ -98,8 +99,8 @@ protected:
         }
 
         if (enableOut) {
-            if (lastKey == key_Left) PostMessage(msg_EncoderLeft);
-            if (lastKey == key_Right) PostMessage(msg_EncoderRight);
+            if (lastKey == key_Left) PostMessage(msg_EncoderLeft, -ENCODER_STEP);
+            if (lastKey == key_Right) PostMessage(msg_EncoderRight, ENCODER_STEP);
         }
     }
 

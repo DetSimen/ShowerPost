@@ -88,13 +88,13 @@ constexpr uint8_t msg_WDT		= 0x05;
 #define msg_ShakeDetected		0x63	// датчик удара чуть потрясся
 
 // encoder 
-#define msg_EncoderLeft			0x70
-#define msg_EncoderRight		0x71
-#define msg_EncoderBtnPress		0x72
-#define msg_EncoderBtnLong		0x73
+constexpr uint16_t msg_EncoderLeft	= 0x70;		// энкодер провращался влево на 1 тик
+constexpr uint16_t msg_EncoderRight = 0x71;		// энкодер провращался вправо на 1 тик
+constexpr uint16_t msg_EncoderClick = 0x72;		// короткое нажатие кнопки энкодера
+constexpr uint16_t msg_EncoderLong	= 0x73;		// длинное нажатие кнопки энкодера
 
-#define msg_ModuleStateChanged  0x80
-#define msg_StatusChanged		0x81
+//#define msg_ModuleStateChanged  0x80
+//#define msg_StatusChanged		0x81
 
 
 
