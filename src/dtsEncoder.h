@@ -92,10 +92,12 @@ protected:
         uint8_t key = ANewValue;
         uint8_t lastKey = key_None;
         
+        uint32_t now = millis();
         while (key != key_None) {
             key = ReadRotary();
             if (key == key_Both) enableOut = true;
             if (enableOut && (key != key_None)) lastKey = key;
+            if (millis() - now > 200) return;
         }
 
         if (enableOut) {

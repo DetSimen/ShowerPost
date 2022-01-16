@@ -64,7 +64,7 @@ constexpr uint16_t msg_LeftEncoderClick = 0x122;
 constexpr uint16_t msg_RightEncoderClick = 0x123;
 constexpr uint16_t msg_ClockNextFlash   = 0x124;
 constexpr uint16_t msg_LeftEncoderMove  = 0x125;
-constexpr uint16_t msg_RightEncoderMove = 0x126;
+constexpr uint16_t msg_RightEncoderMove = 0x126;  // правый энкодер повращался
 constexpr uint16_t msg_NextHeatState    = 0x127;
 constexpr uint16_t msg_HeatSetupEnter   = 0x128;
 constexpr uint16_t msg_HeatSetupExit    = 0x129;
@@ -133,7 +133,8 @@ void Display(void);     // Функция отображения
 /// -----------------------------------------------------------------
 ///
 ///  Блок даччика температуры
-/// 
+///
+///  
 constexpr   int8_t ABSOLUTE_MIN_TEMP = 20;
 constexpr   int8_t ABSOLUTE_MAX_TEMP = 110;
 
@@ -154,7 +155,7 @@ int8_t      MaxTemperature = ABSOLUTE_MIN_TEMP; // Устанавливаема�
 // 
 // 
 
-constexpr uint16_t GALLET_DELTA = 5;  // разброс показаний галетника плюс минус эта величина
+constexpr uint16_t GALLET_DELTA = 10;  // разброс показаний галетника плюс минус эта величина
 #ifdef MINE
 const uint16_t GALLET_VALUES[] = { 689,663,453,322,195,GALLET_DELTA }; // это мои значения галетника
 #else
@@ -218,6 +219,7 @@ TDigitalDevice RelayHeater(PIN_HEATER_RELAY, ACTIVE_LOW);
 constexpr uint32_t SETUP_TIMEOUT        = 10000;    // таймаут установки значений
 constexpr uint32_t COLON_FLASH_TIME     = 500;      // частота мигания двоеточием, полсекунды
 constexpr uint32_t SHOW_APP_STATE_TIME  = 1500;     // длительность показа названий режимов
+constexpr uint16_t TIMER_DEFAULT        = 30;
 
 // состояния программы
 //
@@ -245,6 +247,10 @@ bool Flashing       = false;
 
 int8_t  FlashIndex  = -1;
 bool    SetupMode   = false;
+
+enum class TTimerMode: uint8_t {Seconds, Minutes};
+
+TTimerMode TimerMode = TTimerMode::Seconds;
 
 
 #pragma endregion
@@ -356,7 +362,6 @@ void Display() {
         break;
     }
     case TAppState::Prog2:
-        Disp.Print("Pr 2");
         break;
     case TAppState::Heat: {
         if (HeaterMode == THeaterMode::Temp) Disp.PrintDeg(CurrentTemperature);
@@ -398,8 +403,8 @@ void DisplayModeName(TAppState AState) {
 int16_t GetGalletIndex(const uint16_t AValue) {
 
     for (uint8_t i = 0; i < GALLET_VALUES_SIZE; ++i) {
-        uint16_t min = GALLET_VALUES[i] - 5;
-        uint16_t max = GALLET_VALUES[i] + 5;
+        uint16_t min = GALLET_VALUES[i] - GALLET_DELTA;
+        uint16_t max = GALLET_VALUES[i] + GALLET_DELTA;
         if ((AValue >= min) && (AValue <= max)) return i;
     }
 
@@ -702,6 +707,8 @@ void Dispatch(const TMessage& Msg) {
         if (HeaterMode == THeaterMode::Temp) break;
         SetupMode = true;
         FlashIndex = -1;
+        TimerCurrentValue = TIMER_DEFAULT;
+        MaxTemperature = CurrentTemperature;
         Timers.SetNewInterval(hTimerTimeOut, SETUP_TIMEOUT);
         Display();
         break;
@@ -709,7 +716,6 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_HeatSetupExit: {
         SetupMode = false;
-        puts("Heat Setup Exit");
         Display();
         break;
     }
@@ -725,13 +731,13 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_SetTimer: {
         int8_t step = Msg.LoParam;
-        int16_t value = TimerCurrentValue;
+        int16_t value = static_cast<int16_t>(TimerCurrentValue);
         char  buf[5];
         sprintf(buf, "%04d", value);
         if (FlashIndex < 0) {
             value += step;
             if (value < 0) value = 0;;
-            if (value > MAX_TIMER_VALUE) value = MAX_TIMER_VALUE;
+            if (value > int16_t(MAX_TIMER_VALUE)) value = MAX_TIMER_VALUE;
         } 
         else {
             char ch = buf[FlashIndex];
