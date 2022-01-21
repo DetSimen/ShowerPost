@@ -31,6 +31,7 @@ constexpr uint8_t PIN_1637_CLOCK            = 12;   // Тактирующий в
 constexpr uint8_t PIN_1637_DATA             = 11;   // Вход данных дисплея ТМ1637
 constexpr uint8_t PIN_TEMP_SENSOR           = 10;   // Вход датчика DS18B20
 constexpr uint8_t PIN_HEATER_RELAY          = 9;    // Пин нагревательного реле
+constexpr uint8_t PIN_HEAT_CTRL             = 8;    // Пин связанный с нагревателем, но без учета градусника
 
 
 constexpr uint8_t PIN_SCL                   = A5;   // I2C Clock DS3231
@@ -206,6 +207,7 @@ bool TimerStarted = false;
 uint16_t TimerCurrentValue = 0;
 
 TDigitalDevice RelayHeater(PIN_HEATER_RELAY, ACTIVE_LOW);
+TDigitalDevice ControlHeater(PIN_HEAT_CTRL, ACTIVE_HIGH);
 
 #pragma endregion
 
@@ -216,10 +218,10 @@ TDigitalDevice RelayHeater(PIN_HEATER_RELAY, ACTIVE_LOW);
 //  Программа
 //
 //
-constexpr uint32_t SETUP_TIMEOUT        = 10000;    // таймаут установки значений
+constexpr uint32_t SETUP_TIMEOUT        = 7500;     // таймаут установки значений
 constexpr uint32_t COLON_FLASH_TIME     = 500;      // частота мигания двоеточием, полсекунды
-constexpr uint32_t SHOW_APP_STATE_TIME  = 1500;     // длительность показа названий режимов
-constexpr uint16_t TIMER_DEFAULT        = 30;
+constexpr uint32_t SHOW_APP_STATE_TIME  = 1500;     // длительность показа названий режимов  1.5 секунды
+constexpr uint16_t TIMER_DEFAULT        = 30;       // таймер нагревателя, нач. значение 30 сек
 
 // состояния программы
 //
@@ -364,10 +366,16 @@ void Display() {
     case TAppState::Prog2:
         break;
     case TAppState::Heat: {
+
         if (HeaterMode == THeaterMode::Temp) Disp.PrintDeg(CurrentTemperature);
-        if (HeaterMode == THeaterMode::MaxTemp) Disp.PrintDeg(MaxTemperature);
+ 
+        if (HeaterMode == THeaterMode::MaxTemp) {
+            Disp.PrintDeg(MaxTemperature);
+            Disp.PrintAt(3,'%'); // подчёркивание в режиме макс. Температуры
+        }
+
         if (HeaterMode == THeaterMode::Timer) DisplayTimer(TimerCurrentValue);
-        Disp.ShowPoint(HeaterMode == THeaterMode::MaxTemp);
+      
         if (SetupMode && Flashing) {
             if (FlashIndex < 0)
                 Disp.Clear();
@@ -384,8 +392,27 @@ void Display() {
 
 void DisplayTimer(const uint16_t AValue) {
     char buf[5];
-    sprintf(buf, "%04d", AValue);
-    Disp.Print(buf);
+    if (TimerMode == TTimerMode::Seconds) {
+        if (SetupMode)
+            sprintf(buf, "%04d", AValue);
+        else
+            sprintf(buf, "%4d", AValue);
+        Disp.Print(buf);
+        Disp.ShowPoint(true);
+    };
+    if (TimerMode == TTimerMode::Minutes) {
+        uint8_t m = AValue / 60;
+        uint8_t s = AValue % 60;
+        if (SetupMode) {
+            Disp.PrintTime(m, s);
+        }
+        else {
+            sprintf(&buf[0], "%2d", m);
+            sprintf(&buf[2], "%02d", s);
+            Disp.Print(buf);
+        }
+        Disp.ShowPoint(true);
+    }
 }
 
 void DisplayModeName(TAppState AState) {
@@ -430,8 +457,8 @@ void SetAppState(const TAppState ANewAppState)
 
     case TAppState::Heat: {
         HeaterMode = THeaterMode::Temp;
-        MaxTemperature = 0;// ABSOLUTE_MIN_TEMP;
-        TimerCurrentValue = 30;
+        MaxTemperature = CurrentTemperature;// ABSOLUTE_MIN_TEMP;
+        TimerCurrentValue = TIMER_DEFAULT;
         TimerStarted = false;
         break;
     }
@@ -468,6 +495,17 @@ void SetAppState(const TAppState ANewAppState)
     Display();
 }
 
+uint16_t SetMinSecTimer(const char* ATimePtr) {
+    char temp[4];
+    memset(temp, 0, 4);
+    strncpy(temp, &ATimePtr[0], 2);
+    uint16_t min = atoi(temp);
+    strncpy(temp, &ATimePtr[2], 2);
+    uint8_t sec = atoi(temp);
+
+    return 60U * min + sec;
+}
+
 //
 // Главная функция диспетчер, сюда стекаются все сообщения 
 // от всех сенсоров и устройств, она распихивает их дальше, либо обрабатывает сама
@@ -476,7 +514,7 @@ void SetAppState(const TAppState ANewAppState)
 void Dispatch(const TMessage& Msg) {
 
     switch (Msg.Message)
-    {
+    { 
     case msg_Error: {
         PClass Sender = PClass(Msg.Sender);
         if (Sender != NULL)
@@ -533,7 +571,8 @@ void Dispatch(const TMessage& Msg) {
 
             if (SetupMode) {
                 SetupMode = false;
-                SendMessage(msg_Paint);
+                if (AppState == TAppState::Heat)  SendMessage(msg_HeatSetupExit);
+                if (AppState == TAppState::Clock) SendMessage(msg_ExitClockSetup);
             }
 
             Timers.Stop(hTimerTimeOut);
@@ -545,6 +584,7 @@ void Dispatch(const TMessage& Msg) {
     case msg_TempChanged: {
         if (Msg.Sender == TempSensor) {
             CurrentTemperature = TempSensor.GetTemperature();
+            if (MaxTemperature == INVALID_TEMPERATURE) MaxTemperature = CurrentTemperature;
             Display();
         }
         break;
@@ -616,6 +656,7 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_LeftEncoderClick: {
         if (AppState == TAppState::Clock && SetupMode) SendMessage(msg_ClockNextFlash);
+        if (AppState == TAppState::Heat && SetupMode) SendMessage(msg_RightEncoderClick);
         break;
     }
 
@@ -672,6 +713,7 @@ void Dispatch(const TMessage& Msg) {
                 Display();
             }
         }
+        if (AppState == TAppState::Heat && SetupMode) SendMessage(msg_RightEncoderMove, Msg.LoParam);
         break;
     }
 
@@ -707,8 +749,6 @@ void Dispatch(const TMessage& Msg) {
         if (HeaterMode == THeaterMode::Temp) break;
         SetupMode = true;
         FlashIndex = -1;
-        TimerCurrentValue = TIMER_DEFAULT;
-        MaxTemperature = CurrentTemperature;
         Timers.SetNewInterval(hTimerTimeOut, SETUP_TIMEOUT);
         Display();
         break;
@@ -716,6 +756,10 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_HeatSetupExit: {
         SetupMode = false;
+        if (TimerCurrentValue < 60)
+            TimerMode = TTimerMode::Seconds;
+        else
+            TimerMode = TTimerMode::Minutes;
         Display();
         break;
     }
@@ -733,22 +777,38 @@ void Dispatch(const TMessage& Msg) {
         int8_t step = Msg.LoParam;
         int16_t value = static_cast<int16_t>(TimerCurrentValue);
         char  buf[5];
-        sprintf(buf, "%04d", value);
         if (FlashIndex < 0) {
+            sprintf(buf, "%04d", value);
             value += step;
-            if (value < 0) value = 0;;
+            if (value < 0) value = 0;
             if (value > int16_t(MAX_TIMER_VALUE)) value = MAX_TIMER_VALUE;
+            value = atoi(buf);
+            if (value > 59)
+                TimerMode = TTimerMode::Minutes;
+            else
+                TimerMode = TTimerMode::Seconds;
         } 
         else {
+            TimerMode = TTimerMode::Minutes;
+            sprintf(&buf[0], "%02d", value / 60);
+            sprintf(&buf[2], "%02d", value % 60);
+            Disp.ShowPoint(true);
             char ch = buf[FlashIndex];
             ch += step;
-            if (ch < '0') ch = '9';
-            if (ch > '9') ch = '0';
+            if ((FlashIndex & 0x01) == 0x00) {
+                if (ch < '0') ch = '5';
+                if (ch > '5') ch = '0';
+            }
+            else {
+                if (ch < '0') ch = '9';
+                if (ch > '9') ch = '0';
+            }
             buf[FlashIndex] = ch;
-            value = atoi(buf);
+            value = SetMinSecTimer(buf);
         }
 
         TimerCurrentValue = value;
+
         Display();
 
         break;
@@ -764,6 +824,7 @@ void Stop(void)
 {
     TimerStarted = false;
     TimerCurrentValue = 0;
-    MaxTemperature = ABSOLUTE_MIN_TEMP;
+//    MaxTemperature = ABSOLUTE_MIN_TEMP;
     RelayHeater.Off();
+    ControlHeater.Off();
 }
