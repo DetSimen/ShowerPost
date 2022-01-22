@@ -31,7 +31,7 @@ constexpr uint8_t PIN_1637_CLOCK            = 12;   // Тактирующий в
 constexpr uint8_t PIN_1637_DATA             = 11;   // Вход данных дисплея ТМ1637
 constexpr uint8_t PIN_TEMP_SENSOR           = 10;   // Вход датчика DS18B20
 constexpr uint8_t PIN_HEATER_RELAY          = 9;    // Пин нагревательного реле
-constexpr uint8_t PIN_HEAT_CTRL             = 8;    // Пин связанный с нагревателем, но без учета градусника
+constexpr uint8_t PIN_VENT_RELAY            = 8;    // Пин связанный с нагревателем, но без учета градусника
 
 
 constexpr uint8_t PIN_SCL                   = A5;   // I2C Clock DS3231
@@ -72,6 +72,9 @@ constexpr uint16_t msg_HeatSetupExit    = 0x129;
 constexpr uint16_t msg_NextFlashIndex   = 0x12A;
 constexpr uint16_t msg_SetMaxTemp       = 0x12B;
 constexpr uint16_t msg_SetTimer         = 0x12C;
+constexpr uint16_t msg_StartTimer       = 0x12D; 
+constexpr uint16_t msg_PauseTimer       = 0x12E;
+constexpr uint16_t msg_StopTimer        = 0x12F;
 
 /// -------------------------------------------------------------------------------------
 ///
@@ -204,10 +207,15 @@ THeaterMode HeaterMode = THeaterMode::Temp;
 
 bool TimerStarted = false;
 
+enum class THeatTimerState : uint8_t { Unknown = 0xFF, Run = 0, Pause = 1, Stop = 2, Error = 3 };
+THeatTimerState TimerState = THeatTimerState::Unknown;
+
+void SetTimerState(const THeatTimerState ANewState);
+
 uint16_t TimerCurrentValue = 0;
 
-TDigitalDevice RelayHeater(PIN_HEATER_RELAY, ACTIVE_LOW);
-TDigitalDevice ControlHeater(PIN_HEAT_CTRL, ACTIVE_HIGH);
+TDigitalDevice HeaterRelay(PIN_HEATER_RELAY, ACTIVE_LOW);
+TDigitalDevice VentRelay(PIN_VENT_RELAY, ACTIVE_LOW);
 
 #pragma endregion
 
@@ -265,6 +273,10 @@ TTimerMode TimerMode = TTimerMode::Seconds;
 void Dispatch(const TMessage& Msg);  // функция обработки сообщений, прототип
 void Stop(void);
 void DisplayTimer(const uint16_t AValue);
+void StartHeating(void);
+void StartVent(void);
+void StopHeating(void);
+void StopVent(void);
 
 
 #pragma endregion
@@ -398,8 +410,8 @@ void DisplayTimer(const uint16_t AValue) {
         else
             sprintf(buf, "%4d", AValue);
         Disp.Print(buf);
-        Disp.ShowPoint(true);
     };
+
     if (TimerMode == TTimerMode::Minutes) {
         uint8_t m = AValue / 60;
         uint8_t s = AValue % 60;
@@ -411,8 +423,12 @@ void DisplayTimer(const uint16_t AValue) {
             sprintf(&buf[2], "%02d", s);
             Disp.Print(buf);
         }
-        Disp.ShowPoint(true);
     }
+
+    if (TimerState == THeatTimerState::Pause) Disp.PrintAt(0, 'P');
+
+    Disp.ShowPoint(true);
+
 }
 
 void DisplayModeName(TAppState AState) {
@@ -436,6 +452,56 @@ int16_t GetGalletIndex(const uint16_t AValue) {
     }
 
     return INVALID_INDEX;
+}
+
+void SetTimerState(const THeatTimerState ANewState)
+{
+    if (TimerState == ANewState) return;
+    TimerState = ANewState;
+    uint8_t state = static_cast<uint8_t>(TimerState);
+    printf("TimerState changed to %d\n", state);
+
+    switch (TimerState)
+    {
+    case THeatTimerState::Unknown:
+        SetTimerState(THeatTimerState::Error);
+        break;
+
+    case THeatTimerState::Run:
+        if (TimerCurrentValue > 0) {
+            TimerStarted = true;
+            HeaterMode = THeaterMode::Timer;
+            StartHeating();
+            StartVent();
+        }
+        else 
+            SetTimerState(THeatTimerState::Stop);
+        break;
+
+    case THeatTimerState::Pause:
+        TimerStarted = false;
+        StopHeating();
+        break;
+
+    case THeatTimerState::Stop:
+        Stop();
+        HeaterMode = THeaterMode::Temp;
+        Display();
+        break;
+
+    case THeatTimerState::Error:
+        Disp.Print("Er H");
+        Stop();
+        ledAlive.On();
+        cli();
+        abort();
+        break;
+
+    default:
+        break;
+    }
+
+    Display();
 }
 
 void SetAppState(const TAppState ANewAppState)
@@ -506,6 +572,12 @@ uint16_t SetMinSecTimer(const char* ATimePtr) {
     return 60U * min + sec;
 }
 
+void CheckMaxTemp(const int8_t ATemp) {
+    if (ATemp > MaxTemperature) StopHeating();
+    if (TimerState == THeatTimerState::Run) {
+        if ((MaxTemperature > CurrentTemperature) && (MaxTemperature - CurrentTemperature > 5)) StartHeating();
+    }
+}
 //
 // Главная функция диспетчер, сюда стекаются все сообщения 
 // от всех сенсоров и устройств, она распихивает их дальше, либо обрабатывает сама
@@ -585,6 +657,7 @@ void Dispatch(const TMessage& Msg) {
         if (Msg.Sender == TempSensor) {
             CurrentTemperature = TempSensor.GetTemperature();
             if (MaxTemperature == INVALID_TEMPERATURE) MaxTemperature = CurrentTemperature;
+            if (HeaterRelay.isOn()) CheckMaxTemp(CurrentTemperature);
             Display();
         }
         break;
@@ -604,8 +677,23 @@ void Dispatch(const TMessage& Msg) {
         break;
     }
 
-    case msg_SecondsChanged:
+    case msg_SecondsChanged: {
+        if (TimerState == THeatTimerState::Run) {
+
+            if (TimerCurrentValue > 0)
+                --TimerCurrentValue;
+            else
+                SetTimerState(THeatTimerState::Stop);
+
+            if (TimerCurrentValue < 60)
+                TimerMode = TTimerMode::Seconds;
+            else
+                TimerMode = TTimerMode::Minutes;
+
+            Display();
+        }
         break;
+    }
 
     case msg_TimeChanged: {
         Now = Clock.GetTime();
@@ -642,6 +730,13 @@ void Dispatch(const TMessage& Msg) {
             else
                 SendMessage(msg_EnterClockSetup);
         } 
+
+        if (AppState == TAppState::Heat) {
+            if (TimerState != THeatTimerState::Run)
+                SendMessage(msg_StartTimer);
+            else
+                SendMessage(msg_PauseTimer);
+        }
         break;
     }
 
@@ -814,6 +909,14 @@ void Dispatch(const TMessage& Msg) {
         break;
     }
 
+    case msg_StartTimer:
+        if (TimerState != THeatTimerState::Error) SetTimerState(THeatTimerState::Run);
+        break;
+
+    case msg_PauseTimer:
+        SetTimerState(THeatTimerState::Pause);
+        break;
+
     default: // если мы пропустили какое сообщение, этот блок выведет в сериал его номер и параметры
         printf("Unhandled message 0x%X, Lo = 0x%X, Hi = 0x%X\n", Msg.Message, Msg.LoParam, Msg.HiParam);
         break;
@@ -823,8 +926,24 @@ void Dispatch(const TMessage& Msg) {
 void Stop(void)
 {
     TimerStarted = false;
-    TimerCurrentValue = 0;
-//    MaxTemperature = ABSOLUTE_MIN_TEMP;
-    RelayHeater.Off();
-    ControlHeater.Off();
+    TimerCurrentValue = TIMER_DEFAULT;
+
+    StopHeating();
+    StopVent();
+}
+
+void StartHeating(void) {
+    if (MaxTemperature > CurrentTemperature) HeaterRelay.On();
+}
+
+void StartVent(void) {
+    VentRelay.On();
+}
+
+void StopHeating(void) {
+    HeaterRelay.Off();
+}
+
+void StopVent(void) {
+    VentRelay.Off();
 }
