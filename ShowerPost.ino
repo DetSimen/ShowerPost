@@ -316,17 +316,20 @@ void setup() {                                  // начальные настр
 //    puts(__TIME__);
 }
 
-void loop() {                   // бесконечный цикл
+void loop() {                   // главный цыкал приложения
 
-    TempSensor.Read();
+    TempSensor.Read();          // читаем темп. даччик
 
-    Clock.Read();
+    Clock.Read();               // читаем часы 3231
 
-    GalletSwitch.Read();
+    GalletSwitch.Read();        // читаем галетник
 
-    LeftEncoder.Read();
+    LeftEncoder.Read();         // читаем левый энкодер
 
-    RightEncoder.Read();
+    RightEncoder.Read();        // читаем правый энкодер
+
+    // если кто-то из них наклал чонить в очередь сообщений
+    // передаем сообщение диспеччеру
 
     if (MessageList.Available()) Dispatch(MessageList.GetMessage());
 }
@@ -464,33 +467,34 @@ void SetTimerState(const THeatTimerState ANewState)
     switch (TimerState)
     {
     case THeatTimerState::Unknown:
-        SetTimerState(THeatTimerState::Error);
+        SetTimerState(THeatTimerState::Error); // это апшыпка
         break;
 
     case THeatTimerState::Run:
-        if (TimerCurrentValue > 0) {
+        if (TimerCurrentValue > 0) { // Включаем нагрев и вентиляторы
             TimerStarted = true;
             HeaterMode = THeaterMode::Timer;
             StartHeating();
             StartVent();
         }
         else 
-            SetTimerState(THeatTimerState::Stop);
+            SetTimerState(THeatTimerState::Stop);// если таймер кончился, то всё выкл
         break;
 
-    case THeatTimerState::Pause:
+    case THeatTimerState::Pause: // Пауза. Отключаем только нагрев
         TimerStarted = false;
         StopHeating();
         break;
 
-    case THeatTimerState::Stop:
+    case THeatTimerState::Stop: // Режим "Стоп" отключаем и нагрев и вентиляторы
         Stop();
         HeaterMode = THeaterMode::Temp;
         Display();
         break;
 
     case THeatTimerState::Error:
-        Disp.Print("Er H");
+        Disp.Print("Er H");  // Ошибка. Отключаем всё, выводим на Дисплей "Er H" и зависаем 
+                             // до перезагрузки   
         Stop();
         ledAlive.On();
         cli();
@@ -498,6 +502,7 @@ void SetTimerState(const THeatTimerState ANewState)
         break;
 
     default:
+        SetTimerState(THeatTimerState::Error); // если попали сюда, это апшыпка. 
         break;
     }
 
@@ -573,7 +578,7 @@ uint16_t SetMinSecTimer(const char* ATimePtr) {
 }
 
 void CheckMaxTemp(const int8_t ATemp) {
-    if (ATemp > MaxTemperature) StopHeating();
+    if (ATemp >= MaxTemperature) StopHeating();
     if (TimerState == THeatTimerState::Run) {
         if ((MaxTemperature > CurrentTemperature) && (MaxTemperature - CurrentTemperature > 5)) StartHeating();
     }
@@ -597,7 +602,7 @@ void Dispatch(const TMessage& Msg) {
         SetAppState(TAppState::Error);
 
         break;
-    }
+    } // Апшыпка, останавливаем всё
 
     case msg_Paint: {
         Display();
@@ -623,31 +628,27 @@ void Dispatch(const TMessage& Msg) {
 #endif
         }
 
-        if (Msg.LoParam == hTimerColon) {
+        if (Msg.LoParam == hTimerColon) { // мигаем двоеточием в часах
             Flashing = !Flashing;
 
             if ((AppState == TAppState::Clock) && (!ShowModeName))
                 Disp.ToggleColon();
-//            else
-//                Disp.ShowPoint(false);
-
-            if (SetupMode) Display();
         }
 
-        if (Msg.LoParam == hTimerTimeOut) {
+        if (Msg.LoParam == hTimerTimeOut) { // один таймер для разных таймаутов
             
-            if (ShowModeName) {
+            if (ShowModeName) {       // таймаут показа режимов работы
                 ShowModeName = false;
                 Display();
             }
 
-            if (SetupMode) {
+            if (SetupMode) {  // таймаут мигания цифр при установке часов, температуры и т.д
                 SetupMode = false;
                 if (AppState == TAppState::Heat)  SendMessage(msg_HeatSetupExit);
                 if (AppState == TAppState::Clock) SendMessage(msg_ExitClockSetup);
             }
 
-            Timers.Stop(hTimerTimeOut);
+            Timers.Stop(hTimerTimeOut); // останавливаем таймер таймаута, до след. применения
         }
 
         break;
