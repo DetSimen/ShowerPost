@@ -518,7 +518,8 @@ void SetAppState(const TAppState ANewAppState)
 
     DisplayModeName(AppState);
 
-    Stop();
+    SetTimerState(THeatTimerState::Stop);
+    
 
     switch (AppState)
     {
@@ -736,7 +737,7 @@ void Dispatch(const TMessage& Msg) {
             if (TimerState != THeatTimerState::Run)
                 SendMessage(msg_StartTimer);
             else
-                SendMessage(msg_PauseTimer);
+                SetTimerState(THeatTimerState::Stop);
         }
         break;
     }
@@ -763,7 +764,15 @@ void Dispatch(const TMessage& Msg) {
                 SendMessage(msg_NextFlashIndex);
             else
                 SendMessage(msg_NextHeatState);
+
+
+            if (TimerState == THeatTimerState::Run)
+                SetTimerState(THeatTimerState::Pause);
+            else if (TimerState == THeatTimerState::Pause)
+                SetTimerState(THeatTimerState::Run);
         }
+
+
         break;
     }
 
