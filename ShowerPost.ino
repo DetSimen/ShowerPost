@@ -71,10 +71,10 @@ constexpr uint16_t msg_HeatSetupEnter   = 0x128;
 constexpr uint16_t msg_HeatSetupExit    = 0x129;
 constexpr uint16_t msg_NextFlashIndex   = 0x12A;
 constexpr uint16_t msg_SetMaxTemp       = 0x12B;
-constexpr uint16_t msg_SetTimer         = 0x12C;
-constexpr uint16_t msg_StartTimer       = 0x12D; 
-constexpr uint16_t msg_PauseTimer       = 0x12E;
-constexpr uint16_t msg_StopTimer        = 0x12F;
+constexpr uint16_t msg_TimerHeatSet     = 0x12C;
+constexpr uint16_t msg_TimerHeatStart   = 0x12D; 
+constexpr uint16_t msg_TimerHeatPause   = 0x12E;
+constexpr uint16_t msg_TimerHeatStop    = 0x12F;
 
 /// -------------------------------------------------------------------------------------
 ///
@@ -274,9 +274,7 @@ void Dispatch(const TMessage& Msg);  // функция обработки соо
 void Stop(void);
 void DisplayTimer(const uint16_t AValue);
 void StartHeating(void);
-void StartVent(void);
 void StopHeating(void);
-void StopVent(void);
 
 
 #pragma endregion
@@ -337,7 +335,7 @@ void loop() {                   // главный цыкал приложени�
 void Beep(const uint32_t ADuration)
 {
 #ifdef DEBUG
-    puts("Beep ON");
+    printf("Beep %ld\n", ADuration);
 #else
     Beeper.On();
 #endif
@@ -349,7 +347,7 @@ void Display() {
 
     if (ShowModeName) return;
 
-    Disp.Clear();
+//    Disp.Clear();
 
     Disp.ShowPoint(false);
 
@@ -428,7 +426,9 @@ void DisplayTimer(const uint16_t AValue) {
         }
     }
 
-    if (TimerState == THeatTimerState::Pause) Disp.PrintAt(0, 'P');
+    if (TimerState == THeatTimerState::Pause) {
+       if(!SetupMode) Disp.PrintAt(0, 'P');
+    }
 
     Disp.ShowPoint(true);
 
@@ -461,8 +461,6 @@ void SetTimerState(const THeatTimerState ANewState)
 {
     if (TimerState == ANewState) return;
     TimerState = ANewState;
-    uint8_t state = static_cast<uint8_t>(TimerState);
-    printf("TimerState changed to %d\n", state);
 
     switch (TimerState)
     {
@@ -475,20 +473,17 @@ void SetTimerState(const THeatTimerState ANewState)
             TimerStarted = true;
             HeaterMode = THeaterMode::Timer;
             StartHeating();
-            StartVent();
         }
-        else 
-            SetTimerState(THeatTimerState::Stop);// если таймер кончился, то всё выкл
         break;
 
-    case THeatTimerState::Pause: // Пауза. Отключаем только нагрев
+    case THeatTimerState::Pause: // Пауза. Отключаем нагрев и вентиляторы
         TimerStarted = false;
         StopHeating();
         break;
 
-    case THeatTimerState::Stop: // Режим "Стоп" отключаем и нагрев и вентиляторы
+    case THeatTimerState::Stop: // Режим "Стоп" отключаем нагрев и вентиляторы
         Stop();
-        HeaterMode = THeaterMode::Temp;
+        HeaterMode = THeaterMode::Timer;
         Display();
         break;
 
@@ -634,6 +629,8 @@ void Dispatch(const TMessage& Msg) {
 
             if ((AppState == TAppState::Clock) && (!ShowModeName))
                 Disp.ToggleColon();
+
+            if (SetupMode) Display();
         }
 
         if (Msg.LoParam == hTimerTimeOut) { // один таймер для разных таймаутов
@@ -685,7 +682,7 @@ void Dispatch(const TMessage& Msg) {
             if (TimerCurrentValue > 0)
                 --TimerCurrentValue;
             else
-                SetTimerState(THeatTimerState::Stop);
+                SendMessage(msg_TimerHeatStop);
 
             if (TimerCurrentValue < 60)
                 TimerMode = TTimerMode::Seconds;
@@ -733,9 +730,9 @@ void Dispatch(const TMessage& Msg) {
                 SendMessage(msg_EnterClockSetup);
         } 
 
-        if (AppState == TAppState::Heat) {
+        if ((AppState == TAppState::Heat) && (!SetupMode)) {
             if (TimerState != THeatTimerState::Run)
-                SendMessage(msg_StartTimer);
+                SendMessage(msg_TimerHeatStart);
             else
                 SetTimerState(THeatTimerState::Stop);
         }
@@ -754,6 +751,10 @@ void Dispatch(const TMessage& Msg) {
     case msg_LeftEncoderClick: {
         if (AppState == TAppState::Clock && SetupMode) SendMessage(msg_ClockNextFlash);
         if (AppState == TAppState::Heat && SetupMode) SendMessage(msg_RightEncoderClick);
+        if(AppState==TAppState::Heat){
+            if (TimerState == THeatTimerState::Run) SendMessage(msg_TimerHeatPause);
+            if (TimerState == THeatTimerState::Pause) SendMessage(msg_TimerHeatStart);
+        }
         break;
     }
 
@@ -764,12 +765,6 @@ void Dispatch(const TMessage& Msg) {
                 SendMessage(msg_NextFlashIndex);
             else
                 SendMessage(msg_NextHeatState);
-
-
-            if (TimerState == THeatTimerState::Run)
-                SetTimerState(THeatTimerState::Pause);
-            else if (TimerState == THeatTimerState::Pause)
-                SetTimerState(THeatTimerState::Run);
         }
 
 
@@ -835,7 +830,7 @@ void Dispatch(const TMessage& Msg) {
         if (Timers.isActive(hTimerTimeOut)) Timers.Reset(hTimerTimeOut);
         if (SetupMode) {
             if (HeaterMode == THeaterMode::MaxTemp) SendMessage(msg_SetMaxTemp, Msg.LoParam);
-            if (HeaterMode == THeaterMode::Timer) SendMessage(msg_SetTimer, Msg.LoParam);
+            if (HeaterMode == THeaterMode::Timer) SendMessage(msg_TimerHeatSet, Msg.LoParam);
         }
         break;
     }
@@ -844,8 +839,10 @@ void Dispatch(const TMessage& Msg) {
         if (AppState == TAppState::Heat) {
             if (SetupMode)
                 SendMessage(msg_HeatSetupExit);
-            else
+            else {
+                if (TimerState == THeatTimerState::Run) SendMessage(msg_TimerHeatPause);
                 SendMessage(msg_HeatSetupEnter);
+            }
         }
         break;
     }
@@ -878,7 +875,7 @@ void Dispatch(const TMessage& Msg) {
         break;
     }
 
-    case msg_SetTimer: {
+    case msg_TimerHeatSet: {
         int8_t step = Msg.LoParam;
         int16_t value = static_cast<int16_t>(TimerCurrentValue);
         char  buf[5];
@@ -919,13 +916,22 @@ void Dispatch(const TMessage& Msg) {
         break;
     }
 
-    case msg_StartTimer:
-        if (TimerState != THeatTimerState::Error) SetTimerState(THeatTimerState::Run);
+    case msg_TimerHeatStart:
+        Beep(300);
+        if ((TimerState == THeatTimerState::Stop) || (TimerState == THeatTimerState::Pause))
+           SetTimerState(THeatTimerState::Run);
         break;
 
-    case msg_PauseTimer:
+    case msg_TimerHeatPause:
+        Beep(100);
         SetTimerState(THeatTimerState::Pause);
         break;
+
+    case msg_TimerHeatStop: {
+        Beep(1000);
+        SetTimerState(THeatTimerState::Stop);
+        break;
+    }
 
     default: // если мы пропустили какое сообщение, этот блок выведет в сериал его номер и параметры
         printf("Unhandled message 0x%X, Lo = 0x%X, Hi = 0x%X\n", Msg.Message, Msg.LoParam, Msg.HiParam);
@@ -939,21 +945,15 @@ void Stop(void)
     TimerCurrentValue = TIMER_DEFAULT;
 
     StopHeating();
-    StopVent();
 }
 
 void StartHeating(void) {
     if (MaxTemperature > CurrentTemperature) HeaterRelay.On();
-}
-
-void StartVent(void) {
     VentRelay.On();
 }
 
+
 void StopHeating(void) {
     HeaterRelay.Off();
-}
-
-void StopVent(void) {
     VentRelay.Off();
 }
