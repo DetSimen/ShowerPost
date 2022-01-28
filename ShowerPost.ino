@@ -75,6 +75,7 @@ constexpr uint16_t msg_TimerHeatSet     = 0x12C;
 constexpr uint16_t msg_TimerHeatStart   = 0x12D; 
 constexpr uint16_t msg_TimerHeatPause   = 0x12E;
 constexpr uint16_t msg_TimerHeatStop    = 0x12F;
+constexpr uint16_t msg_DisplayNext      = 0x130;  // показать след. экран в режиме нагревателя
 
 /// -------------------------------------------------------------------------------------
 ///
@@ -199,7 +200,12 @@ TEncoder RightEncoder(PIN_R_ENCODER_LEFT, PIN_R_ENCODER_RIGHT, PIN_R_ENCODER_BUT
 
 #pragma region Heater
 
-constexpr   uint16_t MAX_TIMER_VALUE = 9999;
+constexpr   uint16_t MAX_TIMER_VALUE    = 9999;
+constexpr   int8_t   DELTA_TEMP         = 5;    // гистерезис температуры
+constexpr   int8_t   MIN_VENT_TEMP      = 30;   // мин. температура вкл вентиляторов
+
+constexpr   uint32_t DISPLAY_TIMER      = 10000;    // показывать таймер с обр. отсчетом
+constexpr   uint32_t DISPLAY_TEMP       = 1500;     // показывать температуру
 
 enum class THeaterMode: uint8_t {Temp, MaxTemp, Timer};
 
@@ -404,7 +410,14 @@ void Display() {
 }
 
 void DisplayTimer(const uint16_t AValue) {
+    
     char buf[5];
+
+    if (TimerStarted && TimerCurrentValue == 0) {
+        Disp.Print("StOP");
+        return;
+    }
+
     if (TimerMode == TTimerMode::Seconds) {
         if (SetupMode)
             sprintf(buf, "%04d", AValue);
@@ -473,6 +486,8 @@ void SetTimerState(const THeatTimerState ANewState)
             TimerStarted = true;
             HeaterMode = THeaterMode::Timer;
             StartHeating();
+            Timers.SetNewInterval(hTimerTimeOut, DISPLAY_TIMER);
+            Timers.Reset(hTimerTimeOut);
         }
         break;
 
@@ -574,10 +589,14 @@ uint16_t SetMinSecTimer(const char* ATimePtr) {
 }
 
 void CheckMaxTemp(const int8_t ATemp) {
-    if (ATemp >= MaxTemperature) StopHeating();
-    if (TimerState == THeatTimerState::Run) {
-        if ((MaxTemperature > CurrentTemperature) && (MaxTemperature - CurrentTemperature > 5)) StartHeating();
-    }
+    if (CurrentTemperature >= MaxTemperature) HeaterRelay.Off();
+
+    if ((MaxTemperature - CurrentTemperature) > DELTA_TEMP) HeaterRelay.On();
+
+    if (CurrentTemperature >= MIN_VENT_TEMP)
+        VentRelay.On();
+    else
+        VentRelay.Off();
 }
 //
 // Главная функция диспетчер, сюда стекаются все сообщения 
@@ -646,6 +665,8 @@ void Dispatch(const TMessage& Msg) {
                 if (AppState == TAppState::Clock) SendMessage(msg_ExitClockSetup);
             }
 
+            if (TimerStarted) SendMessage(msg_DisplayNext);
+
             Timers.Stop(hTimerTimeOut); // останавливаем таймер таймаута, до след. применения
         }
 
@@ -656,7 +677,7 @@ void Dispatch(const TMessage& Msg) {
         if (Msg.Sender == TempSensor) {
             CurrentTemperature = TempSensor.GetTemperature();
             if (MaxTemperature == INVALID_TEMPERATURE) MaxTemperature = CurrentTemperature;
-            if (HeaterRelay.isOn()) CheckMaxTemp(CurrentTemperature);
+            if (TimerStarted) CheckMaxTemp(CurrentTemperature);
             Display();
         }
         break;
@@ -750,10 +771,14 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_LeftEncoderClick: {
         if (AppState == TAppState::Clock && SetupMode) SendMessage(msg_ClockNextFlash);
-        if (AppState == TAppState::Heat && SetupMode) SendMessage(msg_RightEncoderClick);
-        if(AppState==TAppState::Heat){
-            if (TimerState == THeatTimerState::Run) SendMessage(msg_TimerHeatPause);
-            if (TimerState == THeatTimerState::Pause) SendMessage(msg_TimerHeatStart);
+        if (AppState == TAppState::Heat) {
+            if (SetupMode)
+                SendMessage(msg_RightEncoderClick);
+            else {
+
+                if (TimerState == THeatTimerState::Run) SendMessage(msg_TimerHeatPause);
+                if (TimerState == THeatTimerState::Pause) SendMessage(msg_TimerHeatStart);
+            }
         }
         break;
     }
@@ -916,20 +941,60 @@ void Dispatch(const TMessage& Msg) {
         break;
     }
 
-    case msg_TimerHeatStart:
+    case msg_TimerHeatStart: {
         Beep(300);
         if ((TimerState == THeatTimerState::Stop) || (TimerState == THeatTimerState::Pause))
-           SetTimerState(THeatTimerState::Run);
+            SetTimerState(THeatTimerState::Run);
         break;
+    }
 
-    case msg_TimerHeatPause:
+    case msg_TimerHeatPause: {
         Beep(100);
         SetTimerState(THeatTimerState::Pause);
         break;
+    }
 
     case msg_TimerHeatStop: {
         Beep(1000);
         SetTimerState(THeatTimerState::Stop);
+        break;
+    }
+
+    case msg_DisplayNext: {
+
+        uint32_t newTime;
+
+        if (TimerCurrentValue < 11) {
+            HeaterMode = THeaterMode::Timer;
+            Timers.Stop(hTimerTimeOut);
+            Display();
+            return;
+        }
+
+        switch (HeaterMode)
+        {
+        case THeaterMode::Temp:
+            HeaterMode = THeaterMode::MaxTemp;
+            newTime = DISPLAY_TEMP;
+            break;
+
+        case THeaterMode::MaxTemp:
+            HeaterMode = THeaterMode::Timer;
+            newTime = DISPLAY_TIMER; ;
+            break;
+
+        case THeaterMode::Timer:
+            HeaterMode = THeaterMode::Temp;
+            newTime = DISPLAY_TEMP;
+            break;
+
+        default:
+            break;
+        }
+
+        Timers.SetNewInterval(hTimerTimeOut, newTime);
+        Timers.Reset(hTimerTimeOut);
+        Display();
         break;
     }
 
@@ -949,7 +1014,7 @@ void Stop(void)
 
 void StartHeating(void) {
     if (MaxTemperature > CurrentTemperature) HeaterRelay.On();
-    VentRelay.On();
+    if (CurrentTemperature >= MIN_VENT_TEMP) VentRelay.On();
 }
 
 
