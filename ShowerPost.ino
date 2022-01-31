@@ -22,6 +22,8 @@ template<class T, const uint8_t N> constexpr uint8_t ArraySize(const T(&)[N]) { 
 TMessageList MessageList(12);   // очередь глубиной 12 сообщений
 THardTimers  Timers;            // Таймеры, 10 штук
 
+#pragma region PinDefinitions
+
 //-----------------------------------------------------------------------------------------
 //
 //          Используемые пины
@@ -41,14 +43,16 @@ constexpr uint8_t PIN_BEEPER                = A3;   // Зуммер, + на пи
 constexpr uint8_t PIN_GALLET                = A0;   // Галетник на пине А0
 
 constexpr uint8_t PIN_R_ENCODER_LEFT        = 5;    // пин направления влево правого энкодера
-constexpr uint8_t PIN_R_ENCODER_RIGHT       = 7;    // пин направления вправо правого энкодера
-constexpr uint8_t PIN_R_ENCODER_BUTTON      = 6;    // Кнопка правого энкодера
+constexpr uint8_t PIN_R_ENCODER_RIGHT       = 4;    // пин направления вправо правого энкодера
+constexpr uint8_t PIN_R_ENCODER_BUTTON      = 1;    // Кнопка правого энкодера
 
-constexpr uint8_t PIN_LEFT_ENCODER_LEFT     = 4;    // кнопка направления влево левого энкодера
+constexpr uint8_t PIN_LEFT_ENCODER_LEFT     = 3;    // кнопка направления влево левого энкодера
 constexpr uint8_t PIN_LEFT_ENCODER_RIGHT    = 2;    // кнопка направления вправо левого энкодера
-constexpr uint8_t PIN_LEFT_ENCODER_BUTTON   = 3;    // Кнопка левого энкодера
+constexpr uint8_t PIN_LEFT_ENCODER_BUTTON   = 0;    // Кнопка левого энкодера
 
+#pragma endregion
 
+#pragma region Messages
 
 constexpr uint16_t msg_SoftTimerStart   = 0x110;    // запустить таймер обратного отсчёта
 constexpr uint16_t msg_SoftTimerEnds    = 0x111;    // таймер обратного отсчета закончился
@@ -77,6 +81,10 @@ constexpr uint16_t msg_TimerHeatPause   = 0x12E;
 constexpr uint16_t msg_TimerHeatStop    = 0x12F;
 constexpr uint16_t msg_DisplayNext      = 0x130;  // показать след. экран в режиме нагревателя
 
+#pragma endregion
+
+#pragma region LedAlive
+
 /// -------------------------------------------------------------------------------------
 ///
 /// Блок светодиода активности 
@@ -88,6 +96,8 @@ constexpr uint32_t LED_ALIVE_OFF_TIME   = LED_ALIVE_PERIOD - LED_ALIVE_ON_TIME;
 TLed ledAlive(PIN_LED_ALIVE, ACTIVE_HIGH); // обьект светодиода
 
 THandle hTimerAlive = INVALID_HANDLE;       // его таймер переключения
+
+#pragma endregion
 
 #pragma region Beeper
 
@@ -290,27 +300,23 @@ void StopHeating(void);
 //  implementation
 //
 
-int srl_putchar(char ch, FILE* F) { // служебная функция вывода в сериал
-    return Serial.print(ch);
-}
-
 void setup() {                                  // начальные настройки
     Serial.begin(256000);                       // заводим Serial
-    stdout = fdevopen(srl_putchar, NULL);       // перенаправляем в него весь вывод программы
+    stdout = fdevopen([](char ch, FILE* f)->int {return Serial.print(ch); }, NULL);       // перенаправляем в него весь вывод программы
     delay(200);
     puts("Program ShowerPost v1.0 started..."); // и выводим туда приветственное сообщение
 
-    ledAlive.On();
+    ledAlive.On(); // светодиод активности можно сразу зажечь
 
-    hTimerAlive     = Timers.Add(LED_ALIVE_ON_TIME, TTimerState::Running);
-    hTimerColon     = Timers.Add(COLON_FLASH_TIME, TTimerState::Running);
-    hTimerBeeper    = Timers.Add(BEEP_CHANGE_STATE, TTimerState::Stopped);
-    hTimerTimeOut   = Timers.Add(SHOW_APP_STATE_TIME, TTimerState::Stopped);
+    hTimerAlive     = Timers.Add(LED_ALIVE_ON_TIME, TTimerState::Running);  // таймер мигания светодиода активности
+    hTimerColon     = Timers.Add(COLON_FLASH_TIME, TTimerState::Running);   // таймер мигания двоеточием и цифирками при установке
+    hTimerBeeper    = Timers.Add(BEEP_CHANGE_STATE, TTimerState::Stopped);  // таймер для зуммера, надо же знать, когда его выключить
+    hTimerTimeOut   = Timers.Add(SHOW_APP_STATE_TIME, TTimerState::Stopped);  // таймер для разных таймаутов
 
-    AppState = TAppState::Unknown;
+    AppState = TAppState::Unknown; // для последующего перехода в правильное состояние
 
-    GalletSwitch.SetReadInterval(250);
-    GalletSwitch.SetGap(10);
+    GalletSwitch.SetReadInterval(250);  // читать галетник не чаще раза в 250 мс
+    GalletSwitch.SetGap(10);            // гистерезис срабатывания
 
     Disp.Clear();
     Disp.SetBrightness(2);
@@ -1008,6 +1014,7 @@ void Stop(void)
 {
     TimerStarted = false;
     TimerCurrentValue = TIMER_DEFAULT;
+    if (CurrentTemperature!=INVALID_TEMPERATURE) MaxTemperature = CurrentTemperature;
 
     StopHeating();
 }
