@@ -10,20 +10,16 @@
 
 
 class TI2CCustomSensor : public TCustomSensor {
-private:
+public:
 	static constexpr uint32_t HIGH_SPEED = 400000;
 	static constexpr uint32_t LOW_SPEED = 100000;
 protected: 
 	uint8_t		FDevAddress;
 	bool		FFastSpeed;
 
-	static bool DeviceExist(const uint8_t ADevAddr) {
-		Wire.beginTransmission(ADevAddr);
-		delay(1);
-		return (Wire.endTransmission() == 0);
-	}
 
 	void init(void) override {
+		FInitNeed = false;
 		Wire.begin();
 		Wire.setClock(FFastSpeed ? HIGH_SPEED : LOW_SPEED);
 
@@ -45,4 +41,11 @@ public:
 		FDevAddress = ADevAddr;
 		FFastSpeed = true;
 	}
+
+	static bool DeviceExist(const uint8_t ADevAddr) {
+		Wire.beginTransmission(ADevAddr);
+		delay(1);
+		return (Wire.endTransmission() == 0);
+	}
+
 };

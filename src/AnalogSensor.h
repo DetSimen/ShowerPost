@@ -26,7 +26,7 @@ static 	uint16_t readAnalogPin(const uint8_t APin) {
 		uint16_t value = 0;
 		for (uint8_t i = 0; i < NUM_READ_ATTEMPTS; i++) {
 			value = analogRead(APin);
-			if (value < 10) return 0;
+			if (value < 20) return 0;
 			if (value > 1013) return 1023;
 			result += value;
 			delayMicroseconds(500);

@@ -11,8 +11,10 @@
 #include "src\DS18B20.h"
 #include "src\DS3231.h"
 #include "src\dtsEncoder.h"
+#include "src\PCF8574.h"
+#include "DEF_Pins.h"
 
-template<class T, const uint8_t N> constexpr uint8_t ArraySize(const T(&)[N]) { return N; };
+
 
 #pragma endregion
 
@@ -21,36 +23,6 @@ template<class T, const uint8_t N> constexpr uint8_t ArraySize(const T(&)[N]) { 
 
 TMessageList MessageList(12);   // очередь глубиной 12 сообщений
 THardTimers  Timers;            // Таймеры, 10 штук
-
-#pragma region PinDefinitions
-
-//-----------------------------------------------------------------------------------------
-//
-//          Используемые пины
-//
-constexpr uint8_t PIN_LED_ALIVE     = LED_BUILTIN;  // встроенный светодиод на 13м пине Uno
-constexpr uint8_t PIN_1637_CLOCK            = 12;   // Тактирующий вход дисплея ТМ1637
-constexpr uint8_t PIN_1637_DATA             = 11;   // Вход данных дисплея ТМ1637
-constexpr uint8_t PIN_TEMP_SENSOR           = 10;   // Вход датчика DS18B20
-constexpr uint8_t PIN_HEATER_RELAY          = 9;    // Пин нагревательного реле
-constexpr uint8_t PIN_VENT_RELAY            = 8;    // Пин связанный с нагревателем, но без учета градусника
-
-
-constexpr uint8_t PIN_SCL                   = A5;   // I2C Clock DS3231
-constexpr uint8_t PIN_SDA                   = A4;   // I2C Data DS3231
-constexpr uint8_t PIN_BEEPER                = A3;   // Зуммер, + на пин А3, минус на GND
-
-constexpr uint8_t PIN_GALLET                = A0;   // Галетник на пине А0
-
-constexpr uint8_t PIN_R_ENCODER_LEFT        = 5;    // пин направления влево правого энкодера
-constexpr uint8_t PIN_R_ENCODER_RIGHT       = 4;    // пин направления вправо правого энкодера
-constexpr uint8_t PIN_R_ENCODER_BUTTON      = 1;    // Кнопка правого энкодера
-
-constexpr uint8_t PIN_LEFT_ENCODER_LEFT     = 3;    // кнопка направления влево левого энкодера
-constexpr uint8_t PIN_LEFT_ENCODER_RIGHT    = 2;    // кнопка направления вправо левого энкодера
-constexpr uint8_t PIN_LEFT_ENCODER_BUTTON   = 0;    // Кнопка левого энкодера
-
-#pragma endregion
 
 #pragma region Messages
 
@@ -167,23 +139,10 @@ int8_t      MaxTemperature = ABSOLUTE_MIN_TEMP; // Устанавливаема�
 //
 //  Галетный переключатель
 //
-// 
-// 
-
-constexpr uint16_t GALLET_DELTA = 10;  // разброс показаний галетника плюс минус эта величина
-#ifdef MINE
-const uint16_t GALLET_VALUES[] = { 689,663,453,322,195,GALLET_DELTA }; // это мои значения галетника
-#else
-const uint16_t GALLET_VALUES[] = { GALLET_DELTA,217,351,446,518 };      // это твои
-#endif
-
+constexpr uint8_t GALLET_VALUES[] = { 1,2,0,4,8 };
 constexpr uint8_t GALLET_VALUES_SIZE = ArraySize(GALLET_VALUES);
 
-uint8_t GalletCurrentIndex = 0xFF;
-
-int16_t GetGalletIndex(const uint16_t AValue);
-
-TAnalogSensor GalletSwitch(PIN_GALLET, true);
+Tpcf8574 Gallet(GALLET_ADDRESS, 0xFF);
 
 #pragma endregion
 
@@ -281,6 +240,19 @@ TTimerMode TimerMode = TTimerMode::Seconds;
 
 #pragma endregion
 
+#pragma region Hand Mode
+
+enum class THandMode: uint8_t {Timer=0, Rotate=1};
+
+constexpr uint16_t HAND_TIMER_DEFAULT   = 30;   // Таймер  по умолчанию 30 секунд 
+constexpr uint16_t HAND_ROTATE_DEFAULT  = 40;   // Обороты по умолчанию 40 об/мин
+constexpr uint16_t HAND_ROTATE_MAX      = 1800; // Макс обороты
+
+THandMode HandMode = THandMode::Timer;
+uint16_t  RotateCurrentValue = HAND_ROTATE_DEFAULT;
+
+#pragma endregion
+
 
 //-----------------------------------------------------------------------------------------
 //
@@ -306,6 +278,8 @@ void setup() {                                  // начальные настр
     delay(200);
     puts("Program ShowerPost v1.0 started..."); // и выводим туда приветственное сообщение
 
+    analogReference(EXTERNAL);
+
     ledAlive.On(); // светодиод активности можно сразу зажечь
 
     hTimerAlive     = Timers.Add(LED_ALIVE_ON_TIME, TTimerState::Running);  // таймер мигания светодиода активности
@@ -313,15 +287,12 @@ void setup() {                                  // начальные настр
     hTimerBeeper    = Timers.Add(BEEP_CHANGE_STATE, TTimerState::Stopped);  // таймер для зуммера, надо же знать, когда его выключить
     hTimerTimeOut   = Timers.Add(SHOW_APP_STATE_TIME, TTimerState::Stopped);  // таймер для разных таймаутов
 
-    AppState = TAppState::Unknown; // для последующего перехода в правильное состояние
-
-    GalletSwitch.SetReadInterval(250);  // читать галетник не чаще раза в 250 мс
-    GalletSwitch.SetGap(10);            // гистерезис срабатывания
+    AppState = TAppState::Unknown;  // для последующего перехода в правильное состояние
 
     Disp.Clear();
-    Disp.SetBrightness(2);
+    Disp.SetBrightness(7);          // яркость TM1637
 
-//    Clock.SetTime(__TIME__);  // первоначальная настройка часов
+//    Clock.SetTime(__TIME__);      // первоначальная настройка часов
 
 //    puts(__TIME__);
 }
@@ -332,7 +303,7 @@ void loop() {                   // главный цыкал приложени�
 
     Clock.Read();               // читаем часы 3231
 
-    GalletSwitch.Read();        // читаем галетник
+    Gallet.Read();              // читаем галетник
 
     LeftEncoder.Read();         // читаем левый энкодер
 
@@ -367,8 +338,25 @@ void Display() {
     {
     case TAppState::Prog1:
         break;
-    case TAppState::Hand:
+
+    case TAppState::Hand: {
+        if (!SetupMode) {
+            switch (HandMode)
+            {
+            case THandMode::Timer:
+                DisplayTimer(TimerCurrentValue);
+                break;
+            case THandMode::Rotate:
+                Disp.Print(RotateCurrentValue);
+                Disp.PrintAt(0, 'r');
+                break;
+            default:
+                break;
+            }
+        }
         break;
+    }
+
     case TAppState::Clock: {
         if (SetupMode)
             Disp.PrintTime(SetTime.tm_hour, SetTime.tm_min);
@@ -468,9 +456,7 @@ void DisplayModeName(TAppState AState) {
 int16_t GetGalletIndex(const uint16_t AValue) {
 
     for (uint8_t i = 0; i < GALLET_VALUES_SIZE; ++i) {
-        uint16_t min = GALLET_VALUES[i] - GALLET_DELTA;
-        uint16_t max = GALLET_VALUES[i] + GALLET_DELTA;
-        if ((AValue >= min) && (AValue <= max)) return i;
+        if (GALLET_VALUES[i] == AValue) return i;
     }
 
     return INVALID_INDEX;
@@ -563,12 +549,13 @@ void SetAppState(const TAppState ANewAppState)
         break;
 
     case TAppState::Hand:
-        puts("Hand");
+        RotateCurrentValue = HAND_ROTATE_DEFAULT;
+        TimerCurrentValue = HAND_TIMER_DEFAULT;
+        HandMode = THandMode::Timer;
         break;
 
     case TAppState::Error: {
 //        Stop();
-        puts("Error");
         Timers.Stop();
         ledAlive.On();
         Disp.Print("Err");
@@ -663,6 +650,7 @@ void Dispatch(const TMessage& Msg) {
             if (ShowModeName) {       // таймаут показа режимов работы
                 ShowModeName = false;
                 Display();
+                break;
             }
 
             if (SetupMode) {  // таймаут мигания цифр при установке часов, температуры и т.д
@@ -690,7 +678,7 @@ void Dispatch(const TMessage& Msg) {
     }
                                 
     case msg_SensorValueChanged: {
-        if (Msg.Sender == GalletSwitch) {
+        if (Msg.Sender == Gallet) {
             int16_t gValue = GetGalletIndex(Msg.LoParam);
             if (gValue>=0) SendMessage(msg_GalletGhanged, gValue);
         }
@@ -797,7 +785,13 @@ void Dispatch(const TMessage& Msg) {
             else
                 SendMessage(msg_NextHeatState);
         }
-
+        if (AppState == TAppState::Hand) {
+            if (HandMode == THandMode::Timer)
+                HandMode = THandMode::Rotate;
+            else
+                HandMode = THandMode::Timer;
+            Display();
+        }
 
         break;
     }
