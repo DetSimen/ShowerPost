@@ -73,7 +73,7 @@
       <SDLCheck>true</SDLCheck>
       <ForcedIncludeFiles>$(ProjectDir)__vm\.ShowerPost.vsarduino.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <PreprocessorDefinitions>__AVR_atmega328p__;__AVR_ATmega328P__;__AVR_ATmega328p__;MINE;DEBUG;F_CPU=16000000L;ARDUINO=108019;ARDUINO_AVR_UNO;ARDUINO_ARCH_AVR;__cplusplus=201103L;_VMICRO_INTELLISENSE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\ShowerPost;D:\Arduino\hardware\arduino\avr\libraries\Wire\src;D:\Arduino\hardware\arduino\avr\libraries\Wire\src\utility;D:\Arduino\hardware\arduino\avr\cores\arduino;D:\Arduino\hardware\arduino\avr\variants\standard;D:\Arduino\hardware\tools\avr\\lib\gcc\avr\7.3.0\include;D:\Arduino\hardware\tools\avr\avr\include;D:\Arduino\hardware\tools\avr\\lib\gcc\avr\7.3.0\include;D:\Arduino\hardware\tools\avr\avr\include-fixed;D:\Arduino\hardware\tools\avr\avr\include\avr;D:\Arduino\hardware\tools\avr\lib\gcc\avr\4.9.2\include;D:\Arduino\hardware\tools\avr\lib\gcc\avr\4.9.2\include;D:\Arduino\hardware\tools\avr\lib\gcc\avr\4.9.3\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\ShowerPost;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\hardware\avr\1.8.4\libraries\Wire\src;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\hardware\avr\1.8.4\libraries\Wire\src\utility;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\hardware\avr\1.8.4\cores\arduino;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\hardware\avr\1.8.4\variants\standard;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\\lib\gcc\avr\7.3.0\include;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\avr\include;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\\lib\gcc\avr\7.3.0\include;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\avr\include-fixed;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\avr\include\avr;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\lib\gcc\avr\4.9.2\include;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\lib\gcc\avr\4.9.2\include;C:\Users\Dim\AppData\Local\arduino15\packages\arduino\tools\avr-gcc\7.3.0-atmel3.6.1-arduino7\lib\gcc\avr\4.9.3\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -105,7 +105,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DEF_Pins.h" />
+    <ClInclude Include="src\Driver6600.h" />
+    <ClInclude Include="src\DS18B20.h" />
     <ClInclude Include="src\PCF8574.h" />
+    <ClInclude Include="src\SoftTimer.h" />
     <ClInclude Include="__vm\.ShowerPost.vsarduino.h" />
   </ItemGroup>
   <ItemGroup>
@@ -115,6 +118,7 @@
     <ClCompile Include="Messages.cpp" />
     <ClCompile Include="OneWire.cpp" />
     <ClCompile Include="SoftTimers.cpp" />
+    <ClCompile Include="Timer1.cpp" />
     <ClCompile Include="TimerItem.cpp" />
     <ClCompile Include="TM1637.cpp" />
   </ItemGroup>

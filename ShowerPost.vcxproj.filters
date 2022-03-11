@@ -27,6 +27,15 @@
     <ClInclude Include="DEF_Pins.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\SoftTimer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Driver6600.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\DS18B20.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CustomTimers.cpp">
@@ -51,6 +60,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="HardTimers.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Timer1.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

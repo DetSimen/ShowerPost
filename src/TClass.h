@@ -50,5 +50,7 @@ public:
 
 	operator NativeUInt() { return GetID(); }
 
+	inline void ClearError(void) { FError = false; }
+
 };
 

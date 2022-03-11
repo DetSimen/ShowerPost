@@ -1,5 +1,3 @@
-#pragma region Include
-
 #include <Wire.h>
 #include <Arduino.h>
 #include "src\Messages.h" 
@@ -13,10 +11,9 @@
 #include "src\dtsEncoder.h"
 #include "src\PCF8574.h"
 #include "DEF_Pins.h"
-
-
-
-#pragma endregion
+#include "src\SoftTimer.h"   
+#include "src\Timer1.h"
+#include "src\Driver6600.h"
 
 #pragma region Interface
 
@@ -52,6 +49,7 @@ constexpr uint16_t msg_TimerHeatStart   = 0x12D;
 constexpr uint16_t msg_TimerHeatPause   = 0x12E;
 constexpr uint16_t msg_TimerHeatStop    = 0x12F;
 constexpr uint16_t msg_DisplayNext      = 0x130;  // показать след. экран в режиме нагревателя
+constexpr uint16_t msg_Rotate           = 0x131;
 
 #pragma endregion
 
@@ -196,6 +194,7 @@ TDigitalDevice VentRelay(PIN_VENT_RELAY, ACTIVE_LOW);
 
 #pragma region Program Settings
 
+
 // --------------------------------------------------------------------------------------
 //
 //  Программа
@@ -205,6 +204,7 @@ constexpr uint32_t SETUP_TIMEOUT        = 7500;     // таймаут устан
 constexpr uint32_t COLON_FLASH_TIME     = 500;      // частота мигания двоеточием, полсекунды
 constexpr uint32_t SHOW_APP_STATE_TIME  = 1500;     // длительность показа названий режимов  1.5 секунды
 constexpr uint16_t TIMER_DEFAULT        = 30;       // таймер нагревателя, нач. значение 30 сек
+constexpr uint16_t TIMER_SECONDS        = 1000;     // секундный таймер
 
 // состояния программы
 //
@@ -224,6 +224,7 @@ const char* const AppStateNames[] = { "HEAt", "Pr 1", "OFF", "Pr 2", "HAnd", "Er
 TAppState AppState = TAppState::Unknown;
 
 THandle hTimerTimeOut = INVALID_HANDLE;
+THandle hTimerSeconds = INVALID_HANDLE;
 
 void SetAppState(const TAppState ANewAppState);
 
@@ -233,9 +234,11 @@ bool Flashing       = false;
 int8_t  FlashIndex  = -1;
 bool    SetupMode   = false;
 
-enum class TTimerMode: uint8_t {Seconds, Minutes};
+enum class TTimerMode : uint8_t { Seconds, Minutes };
 
 TTimerMode TimerMode = TTimerMode::Seconds;
+
+TDownCounter AppTimer;
 
 
 #pragma endregion
@@ -245,11 +248,24 @@ TTimerMode TimerMode = TTimerMode::Seconds;
 enum class THandMode: uint8_t {Timer=0, Rotate=1};
 
 constexpr uint16_t HAND_TIMER_DEFAULT   = 30;   // Таймер  по умолчанию 30 секунд 
-constexpr uint16_t HAND_ROTATE_DEFAULT  = 40;   // Обороты по умолчанию 40 об/мин
-constexpr uint16_t HAND_ROTATE_MAX      = 1800; // Макс обороты
+constexpr uint16_t HAND_ROTATE_DEFAULT  = 30;   // Обороты по умолчанию 30 об/мин
+
+constexpr uint8_t PIN_MOTOR_EN = 10;
+constexpr uint8_t PIN_MOTOR_DIR = 11;
+constexpr uint8_t PIN_MOTOR_STEP = 9;
+
+constexpr uint16_t MOTOR_MIN_RPM    = 10;
+constexpr uint16_t MOTOR_START_RPM  = 100;
+constexpr uint16_t MOTOR_MAX_RPM    = 1500;
+constexpr uint16_t MOTOR_DELTA_RPM  = 10;
 
 THandMode HandMode = THandMode::Timer;
-uint16_t  RotateCurrentValue = HAND_ROTATE_DEFAULT;
+
+uint16_t  CurrentRPM = MOTOR_MIN_RPM;
+
+TDriver6600 Motor(PIN_MOTOR_DIR, PIN_MOTOR_STEP, PIN_MOTOR_EN);
+
+
 
 #pragma endregion
 
@@ -263,7 +279,9 @@ void Stop(void);
 void DisplayTimer(const uint16_t AValue);
 void StartHeating(void);
 void StopHeating(void);
+void tmrOneChanged(void);
 
+TTimerOne TM1(tmrOneChanged);
 
 #pragma endregion
 
@@ -271,6 +289,11 @@ void StopHeating(void);
 //
 //  implementation
 //
+
+
+void tmrOneChanged(void) {
+    Motor.Pulse();
+}
 
 void setup() {                                  // начальные настройки
     Serial.begin(256000);                       // заводим Serial
@@ -285,7 +308,8 @@ void setup() {                                  // начальные настр
     hTimerAlive     = Timers.Add(LED_ALIVE_ON_TIME, TTimerState::Running);  // таймер мигания светодиода активности
     hTimerColon     = Timers.Add(COLON_FLASH_TIME, TTimerState::Running);   // таймер мигания двоеточием и цифирками при установке
     hTimerBeeper    = Timers.Add(BEEP_CHANGE_STATE, TTimerState::Stopped);  // таймер для зуммера, надо же знать, когда его выключить
-    hTimerTimeOut   = Timers.Add(SHOW_APP_STATE_TIME, TTimerState::Stopped);  // таймер для разных таймаутов
+    hTimerTimeOut   = Timers.Add(SHOW_APP_STATE_TIME, TTimerState::Stopped);// таймер для разных таймаутов
+    hTimerSeconds   = Timers.Add(TIMER_SECONDS, TTimerState::Running);      // секундный таймер
 
     AppState = TAppState::Unknown;  // для последующего перехода в правильное состояние
 
@@ -294,7 +318,7 @@ void setup() {                                  // начальные настр
 
 //    Clock.SetTime(__TIME__);      // первоначальная настройка часов
 
-//    puts(__TIME__);
+    TM1.Run(CurrentRPM);
 }
 
 void loop() {                   // главный цыкал приложения
@@ -347,8 +371,8 @@ void Display() {
                 DisplayTimer(TimerCurrentValue);
                 break;
             case THandMode::Rotate:
-                Disp.Print(RotateCurrentValue);
-                Disp.PrintAt(0, 'r');
+                Disp.Print(CurrentRPM);
+                if (CurrentRPM<1000) Disp.PrintAt(0, 'r');
                 break;
             default:
                 break;
@@ -549,7 +573,7 @@ void SetAppState(const TAppState ANewAppState)
         break;
 
     case TAppState::Hand:
-        RotateCurrentValue = HAND_ROTATE_DEFAULT;
+        CurrentRPM = MOTOR_MIN_RPM;
         TimerCurrentValue = HAND_TIMER_DEFAULT;
         HandMode = THandMode::Timer;
         break;
@@ -607,7 +631,13 @@ void Dispatch(const TMessage& Msg) {
         else
             puts("Unknown error.");
 
-        SetAppState(TAppState::Error);
+        if (Msg.Sender == TempSensor) {
+            if (Msg.LoParam == err_OneWire_CRCError) {
+                puts("Dallas CRC Error");
+                TempSensor.ClearError();
+            }
+        }
+        else SetAppState(TAppState::Error);
 
         break;
     } // Апшыпка, останавливаем всё
@@ -664,6 +694,10 @@ void Dispatch(const TMessage& Msg) {
             Timers.Stop(hTimerTimeOut); // останавливаем таймер таймаута, до след. применения
         }
 
+        if (Msg.LoParam == hTimerSeconds) {
+            if (AppTimer.isRunning()) AppTimer--;
+        }
+
         break;
     }
 
@@ -717,6 +751,15 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_DateChanged: 
         break;
+
+    case msg_CounterEnd: {
+        puts("DownCounter Ends");
+        break;
+    }
+    case msg_CounterTick: {
+        printf("Counter tick to %02d:%02d\n", Msg.LoParam, Msg.HiParam);
+        break;
+    }
 
     case msg_EncoderClick: {
         if (Msg.Sender == LeftEncoder) SendMessage(msg_LeftEncoderClick);
@@ -773,6 +816,12 @@ void Dispatch(const TMessage& Msg) {
                 if (TimerState == THeatTimerState::Run) SendMessage(msg_TimerHeatPause);
                 if (TimerState == THeatTimerState::Pause) SendMessage(msg_TimerHeatStart);
             }
+        }
+        if (AppState == TAppState::Hand) {
+            if (Motor.isOn())
+                Motor.Off();
+            else
+                Motor.On();
         }
         break;
     }
@@ -853,10 +902,33 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_RightEncoderMove: {
         if (Timers.isActive(hTimerTimeOut)) Timers.Reset(hTimerTimeOut);
+        if (AppState == TAppState::Hand) SendMessage(msg_Rotate, Msg.LoParam);
         if (SetupMode) {
             if (HeaterMode == THeaterMode::MaxTemp) SendMessage(msg_SetMaxTemp, Msg.LoParam);
             if (HeaterMode == THeaterMode::Timer) SendMessage(msg_TimerHeatSet, Msg.LoParam);
         }
+        break;
+    }
+
+    case msg_Rotate: {
+        int delta = int(Msg.LoParam);
+        delta *= MOTOR_DELTA_RPM;
+
+        if (HandMode == THandMode::Rotate) {
+            CurrentRPM += delta;
+            if (CurrentRPM < MOTOR_MIN_RPM) CurrentRPM = MOTOR_MIN_RPM;
+            if (CurrentRPM > MOTOR_MAX_RPM) CurrentRPM = MOTOR_MAX_RPM;
+            TM1.SetRPM(CurrentRPM);
+        }
+        if (HandMode == THandMode::Timer) {
+            TimerCurrentValue += delta;
+            if (TimerCurrentValue < HAND_TIMER_DEFAULT) TimerCurrentValue = HAND_TIMER_DEFAULT;
+            if (TimerCurrentValue > MAX_MINUTE)
+                TimerMode = TTimerMode::Minutes;
+            else
+                TimerMode = TTimerMode::Seconds;
+        }
+        Display();
         break;
     }
 

@@ -21,6 +21,9 @@ protected:
 		if (FEnableChangeMsg) PostMessage(msg_DeviceStateChanged, static_cast<uint16_t>(FDeviceState));
 	}
 
+	TCustomDevice(TCustomDevice&) = delete;
+	TCustomDevice(TCustomDevice&&) = delete;
+
 public:
 	TCustomDevice(const bool AEnableMsg=false) {
 		FEnableChangeMsg = AEnableMsg;
@@ -32,6 +35,7 @@ public:
 		FEnableChangeMsg = AEnableSend;
 	}
 
-
+	inline bool isOn(void) { return FDeviceState == TDeviceState::On; }
+	inline bool isOff(void) { return !isOn(); }
 	
 };

@@ -23,8 +23,8 @@ constexpr uint8_t PIN_SDA				= A4;   // I2C Data DS3231
 constexpr uint8_t PIN_BEEPER			= A3;   // Зуммер, + на пин А3, минус на GND
 
 
-constexpr uint8_t PIN_R_ENCODER_LEFT	= 5;    // пин направления влево правого энкодера
-constexpr uint8_t PIN_R_ENCODER_RIGHT	= 4;    // пин направления вправо правого энкодера
+constexpr uint8_t PIN_R_ENCODER_LEFT	= 4;    // пин направления влево правого энкодера
+constexpr uint8_t PIN_R_ENCODER_RIGHT	= 5;    // пин направления вправо правого энкодера
 constexpr uint8_t PIN_R_ENCODER_BUTTON	= 1;    // Кнопка правого энкодера
 
 constexpr uint8_t PIN_LEFT_ENCODER_LEFT		= 2;    // кнопка направления влево левого энкодера
