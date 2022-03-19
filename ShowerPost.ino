@@ -18,7 +18,7 @@
 #pragma region Interface
 
 
-TMessageList MessageList(12);   // очередь глубиной 12 сообщений
+TMessageList MessageList(16);   // очередь глубиной 12 сообщений
 THardTimers  Timers;            // Таймеры, 10 штук
 
 #pragma region Messages
@@ -50,6 +50,7 @@ constexpr uint16_t msg_TimerHeatPause   = 0x12E;
 constexpr uint16_t msg_TimerHeatStop    = 0x12F;
 constexpr uint16_t msg_DisplayNext      = 0x130;  // показать след. экран в режиме нагревателя
 constexpr uint16_t msg_Rotate           = 0x131;
+constexpr uint16_t msg_SetHandSetupMode = 0x132;
 
 #pragma endregion
 
@@ -200,7 +201,7 @@ TDigitalDevice VentRelay(PIN_VENT_RELAY, ACTIVE_LOW);
 //  Программа
 //
 //
-constexpr uint32_t SETUP_TIMEOUT        = 7500;     // таймаут установки значений
+constexpr uint32_t SETUP_TIMEOUT        = 5000;     // таймаут установки значений
 constexpr uint32_t COLON_FLASH_TIME     = 500;      // частота мигания двоеточием, полсекунды
 constexpr uint32_t SHOW_APP_STATE_TIME  = 1500;     // длительность показа названий режимов  1.5 секунды
 constexpr uint16_t TIMER_DEFAULT        = 30;       // таймер нагревателя, нач. значение 30 сек
@@ -265,7 +266,13 @@ uint16_t  CurrentRPM = MOTOR_MIN_RPM;
 
 TDriver6600 Motor(PIN_MOTOR_DIR, PIN_MOTOR_STEP, PIN_MOTOR_EN);
 
+enum class TMotorState: uint8_t {Unknown, Start, Stop, Pause};
 
+TMotorState MotorState = TMotorState::Unknown;
+TMotorDir   MotorDir = TMotorDir::Dir_CW;
+
+void SetMotorState(const TMotorState ANewState);
+void SetMotorDir(const TMotorDir ANewDir);
 
 #pragma endregion
 
@@ -280,8 +287,10 @@ void DisplayTimer(const uint16_t AValue);
 void StartHeating(void);
 void StopHeating(void);
 void tmrOneChanged(void);
+void StartMotor(void);
+void StopMotor(void);
 
-TTimerOne TM1(tmrOneChanged);
+TTimerOne MotorTimer(tmrOneChanged);
 
 #pragma endregion
 
@@ -318,7 +327,7 @@ void setup() {                                  // начальные настр
 
 //    Clock.SetTime(__TIME__);      // первоначальная настройка часов
 
-    TM1.Run(CurrentRPM);
+
 }
 
 void loop() {                   // главный цыкал приложения
@@ -337,6 +346,10 @@ void loop() {                   // главный цыкал приложени�
     // передаем сообщение диспеччеру
 
     if (MessageList.Available()) Dispatch(MessageList.GetMessage());
+}
+
+void Paint(void) {
+    SendMessage(msg_Paint);
 }
 
 void Beep(const uint32_t ADuration)
@@ -364,8 +377,7 @@ void Display() {
         break;
 
     case TAppState::Hand: {
-        if (!SetupMode) {
-            switch (HandMode)
+         switch (HandMode)
             {
             case THandMode::Timer:
                 DisplayTimer(TimerCurrentValue);
@@ -377,7 +389,14 @@ void Display() {
             default:
                 break;
             }
+
+        if (SetupMode && Flashing) {
+            if (FlashIndex < 0)
+                Disp.Clear();
+            else
+                Disp.PrintAt(FlashIndex, SPACE_SYMBOL);
         }
+
         break;
     }
 
@@ -565,11 +584,10 @@ void SetAppState(const TAppState ANewAppState)
         break;
 
     case TAppState::Off:
-        puts("OFF");
+        VentRelay.Off();
         break;
 
     case TAppState::Prog2:
-        puts("Prog 2");
         break;
 
     case TAppState::Hand:
@@ -579,7 +597,8 @@ void SetAppState(const TAppState ANewAppState)
         break;
 
     case TAppState::Error: {
-//        Stop();
+        if (Motor.isOn()) Motor.Off();
+        VentRelay.Off();
         Timers.Stop();
         ledAlive.On();
         Disp.Print("Err");
@@ -588,6 +607,7 @@ void SetAppState(const TAppState ANewAppState)
         break;
     }
     default:
+        SetAppState(TAppState::Error);
         break;
     }
 
@@ -595,15 +615,21 @@ void SetAppState(const TAppState ANewAppState)
 }
 
 uint16_t SetMinSecTimer(const char* ATimePtr) {
-    char temp[4];
-    memset(temp, 0, 4);
+    const uint8_t BUF_SIZE  = 0x04;
+    const uint8_t FILL_CHAR = 0x00;
+
+    char temp[BUF_SIZE];
+    memset(temp, FILL_CHAR, BUF_SIZE);
+
     strncpy(temp, &ATimePtr[0], 2);
     uint16_t min = atoi(temp);
+
     strncpy(temp, &ATimePtr[2], 2);
     uint8_t sec = atoi(temp);
 
     return 60U * min + sec;
 }
+
 
 void CheckMaxTemp(const int8_t ATemp) {
     if (CurrentTemperature >= MaxTemperature) HeaterRelay.Off();
@@ -614,6 +640,41 @@ void CheckMaxTemp(const int8_t ATemp) {
         VentRelay.On();
     else
         VentRelay.Off();
+}
+
+void SetMotorState(const TMotorState ANewState)
+{
+    if (MotorState == ANewState) return;
+    MotorState = ANewState;
+
+    switch (MotorState)
+    {
+    case TMotorState::Start:
+        break;
+    case TMotorState::Stop:
+        Motor.Off();
+        AppTimer.SetInterval(HAND_TIMER_DEFAULT);
+        AppTimer.Stop();
+        MotorTimer.Stop();
+        break;
+    case TMotorState::Pause:
+        break;
+    default:
+        AppTimer.Stop();
+        MotorTimer.Stop();
+        StopMotor();
+        break;
+    }
+}
+
+void SetMotorDir(const TMotorDir ANewDir)
+{
+    if (MotorDir == ANewDir) return;
+    MotorDir = ANewDir;
+    bool isRun = Motor.isOn();
+    StopMotor();
+    Motor.SetDirection(MotorDir);
+    if (isRun) StartMotor();
 }
 //
 // Главная функция диспетчер, сюда стекаются все сообщения 
@@ -687,6 +748,7 @@ void Dispatch(const TMessage& Msg) {
                 SetupMode = false;
                 if (AppState == TAppState::Heat)  SendMessage(msg_HeatSetupExit);
                 if (AppState == TAppState::Clock) SendMessage(msg_ExitClockSetup);
+                if (AppState == TAppState::Hand)    SendMessage(msg_HeatSetupExit);
             }
 
             if (TimerStarted) SendMessage(msg_DisplayNext);
@@ -911,6 +973,9 @@ void Dispatch(const TMessage& Msg) {
     }
 
     case msg_Rotate: {
+        
+        if (!SetupMode) break;
+
         int delta = int(Msg.LoParam);
         delta *= MOTOR_DELTA_RPM;
 
@@ -918,7 +983,7 @@ void Dispatch(const TMessage& Msg) {
             CurrentRPM += delta;
             if (CurrentRPM < MOTOR_MIN_RPM) CurrentRPM = MOTOR_MIN_RPM;
             if (CurrentRPM > MOTOR_MAX_RPM) CurrentRPM = MOTOR_MAX_RPM;
-            TM1.SetRPM(CurrentRPM);
+            MotorTimer.SetRPM(CurrentRPM);
         }
         if (HandMode == THandMode::Timer) {
             TimerCurrentValue += delta;
@@ -941,6 +1006,9 @@ void Dispatch(const TMessage& Msg) {
                 SendMessage(msg_HeatSetupEnter);
             }
         }
+
+        if (AppState == TAppState::Hand) SendMessage(msg_SetHandSetupMode);
+
         break;
     }
 
@@ -959,6 +1027,21 @@ void Dispatch(const TMessage& Msg) {
             TimerMode = TTimerMode::Seconds;
         else
             TimerMode = TTimerMode::Minutes;
+        Display();
+        break;
+    }
+
+    case msg_SetHandSetupMode: {
+        if (SetupMode) {
+            SetupMode = false;
+            Timers.Stop(hTimerTimeOut);
+        }
+        else {
+            SetupMode = true;
+            FlashIndex = -1;
+            Timers.SetNewInterval(hTimerTimeOut, SETUP_TIMEOUT);
+            Timers.Reset(hTimerTimeOut);
+        }
         Display();
         break;
     }
@@ -1074,6 +1157,22 @@ void Dispatch(const TMessage& Msg) {
         printf("Unhandled message 0x%X, Lo = 0x%X, Hi = 0x%X\n", Msg.Message, Msg.LoParam, Msg.HiParam);
         break;
     }
+}
+
+void StartMotor() {
+    if (Motor.isOn()) return;
+
+    Motor.SetDirection(MotorDir);
+    
+    MotorTimer.Run(MOTOR_START_RPM);
+
+    Motor.On();
+    delay(10);
+    MotorTimer.SetRPM(CurrentRPM);
+}
+
+void StopMotor(void) {
+    Motor.Off();
 }
 
 void Stop(void)

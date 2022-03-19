@@ -19,8 +19,6 @@ protected:
 	void Init() {
 		FInitNeed = false;
 
-		puts("Motor Init");
-		
 		pinMode(FpinEN, OUTPUT);
 		digitalWrite(FpinEN, MOTOR_DISABLE);
 
@@ -43,26 +41,28 @@ public:
 		FDeviceState = TDeviceState::Unknown;
 	}
 
-	void On(void) override {
+	void On() override {
 		if (FInitNeed) Init();
-		digitalWrite(FpinDIR, HIGH);// static_cast<uint8_t>(FMotorDir));
+		digitalWrite(FpinDIR, static_cast<uint8_t>(FMotorDir));
 		digitalWrite(FpinEN, MOTOR_ENABLE);
-		puts("Motor ON");
 		SetDeviceState(TDeviceState::On);
 	}
 
 	void Off(void) override {
-		puts("Motor OFF");
 		digitalWrite(FpinEN, MOTOR_DISABLE);
 		SetDeviceState(TDeviceState::Off);
 	}
 
 	void Pulse() {
-		if (FDeviceState == TDeviceState::On) {
-			digitalWrite(FpinStep, !digitalRead(FpinStep));
-		}
-		else
-			digitalWrite(FpinStep, HIGH);
+		if (FDeviceState != TDeviceState::On) return;
+
+		digitalWrite(FpinStep, !digitalRead(FpinStep));
+	}
+
+	void ToggleDirection(void) {
+		bool b = static_cast<bool>(FMotorDir);
+		b = !b;
+		SetDirection(static_cast<TMotorDir>(b));
 	}
 
 	void SetDirection(const TMotorDir ADir) {

@@ -75,8 +75,8 @@ void TTimerOne::Stop(void)
 
 void TTimerOne::Run(const uint16_t ARPM)
 {
-	SetRPM(ARPM);
 	FActive = true;
+	SetRPM(ARPM);
 }
 
 
