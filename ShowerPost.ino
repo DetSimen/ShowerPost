@@ -51,6 +51,8 @@ constexpr uint16_t msg_TimerHeatStop    = 0x12F;
 constexpr uint16_t msg_DisplayNext      = 0x130;  // показать след. экран в режиме нагревателя
 constexpr uint16_t msg_Rotate           = 0x131;
 constexpr uint16_t msg_SetHandSetupMode = 0x132;
+constexpr uint16_t msg_SetMotorState    = 0x133; // вкл/выкл/пауза мотора
+constexpr uint16_t msg_MotorChangeDir   = 0x134; // смена направления вращения мотора
 
 #pragma endregion
 
@@ -289,6 +291,7 @@ void StopHeating(void);
 void tmrOneChanged(void);
 void StartMotor(void);
 void StopMotor(void);
+void BrakeMotor(void);
 
 TTimerOne MotorTimer(tmrOneChanged);
 
@@ -325,6 +328,8 @@ void setup() {                                  // начальные настр
     Disp.Clear();
     Disp.SetBrightness(7);          // яркость TM1637
 
+    SetMotorState(TMotorState::Stop);
+
 //    Clock.SetTime(__TIME__);      // первоначальная настройка часов
 
 
@@ -341,6 +346,7 @@ void loop() {                   // главный цыкал приложени�
     LeftEncoder.Read();         // читаем левый энкодер
 
     RightEncoder.Read();        // читаем правый энкодер
+
 
     // если кто-то из них наклал чонить в очередь сообщений
     // передаем сообщение диспеччеру
@@ -650,18 +656,20 @@ void SetMotorState(const TMotorState ANewState)
     switch (MotorState)
     {
     case TMotorState::Start:
+        HandMode = THandMode::Timer;
+        AppTimer.Run(TimerCurrentValue);
+        StartMotor();
         break;
     case TMotorState::Stop:
-        Motor.Off();
-        AppTimer.SetInterval(HAND_TIMER_DEFAULT);
         AppTimer.Stop();
-        MotorTimer.Stop();
+        TimerCurrentValue = HAND_TIMER_DEFAULT;
+        Display();
+        StopMotor();
         break;
     case TMotorState::Pause:
+        StopMotor();
         break;
     default:
-        AppTimer.Stop();
-        MotorTimer.Stop();
         StopMotor();
         break;
     }
@@ -815,11 +823,13 @@ void Dispatch(const TMessage& Msg) {
         break;
 
     case msg_CounterEnd: {
-        puts("DownCounter Ends");
+        if (MotorState == TMotorState::Start) SetMotorState(TMotorState::Stop);
+        TimerCurrentValue = TIMER_DEFAULT;
         break;
     }
     case msg_CounterTick: {
-        printf("Counter tick to %02d:%02d\n", Msg.LoParam, Msg.HiParam);
+        TimerCurrentValue--;
+        Display();
         break;
     }
 
@@ -856,6 +866,12 @@ void Dispatch(const TMessage& Msg) {
             else
                 SetTimerState(THeatTimerState::Stop);
         }
+
+        if (AppState == TAppState::Hand && (!SetupMode)) {
+            if (MotorState == TMotorState::Stop) SendMessage(msg_SetMotorState, uint8_t(TMotorState::Start));
+            if (MotorState == TMotorState::Start || MotorState==TMotorState::Pause) 
+                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Stop));
+        }
         break;
     }
 
@@ -879,11 +895,12 @@ void Dispatch(const TMessage& Msg) {
                 if (TimerState == THeatTimerState::Pause) SendMessage(msg_TimerHeatStart);
             }
         }
-        if (AppState == TAppState::Hand) {
-            if (Motor.isOn())
-                Motor.Off();
-            else
-                Motor.On();
+ 
+        if (AppState == TAppState::Hand && (!SetupMode)) {
+            if (MotorState == TMotorState::Start)
+                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Pause));
+            if (MotorState == TMotorState::Pause)
+                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Start));
         }
         break;
     }
@@ -1007,7 +1024,10 @@ void Dispatch(const TMessage& Msg) {
             }
         }
 
-        if (AppState == TAppState::Hand) SendMessage(msg_SetHandSetupMode);
+        if (AppState == TAppState::Hand) {
+            if (MotorState==TMotorState::Stop) SendMessage(msg_SetHandSetupMode);
+            if (MotorState == TMotorState::Start) SendMessage(msg_MotorChangeDir);
+        }
 
         break;
     }
@@ -1153,6 +1173,17 @@ void Dispatch(const TMessage& Msg) {
         break;
     }
 
+    case msg_SetMotorState: {
+        TMotorState state = static_cast<TMotorState>(Msg.LoParam);
+        SetMotorState(state);
+        break;
+    }
+
+    case msg_MotorChangeDir: {
+        BrakeMotor();
+        break;
+    }
+
     default: // если мы пропустили какое сообщение, этот блок выведет в сериал его номер и параметры
         printf("Unhandled message 0x%X, Lo = 0x%X, Hi = 0x%X\n", Msg.Message, Msg.LoParam, Msg.HiParam);
         break;
@@ -1167,12 +1198,29 @@ void StartMotor() {
     MotorTimer.Run(MOTOR_START_RPM);
 
     Motor.On();
-    delay(10);
+    delay(100);
     MotorTimer.SetRPM(CurrentRPM);
 }
 
 void StopMotor(void) {
     Motor.Off();
+    AppTimer.Stop();
+    MotorTimer.Stop();
+}
+
+void BrakeMotor() {
+
+    for (uint16_t rpm = CurrentRPM; rpm > MOTOR_MIN_RPM; rpm -= MOTOR_DELTA_RPM) {
+        MotorTimer.SetRPM(rpm);
+        delay(100);
+    }
+
+    SetMotorState(TMotorState::Pause);
+
+    MotorDir = (MotorDir == TMotorDir::Dir_CCW) ? TMotorDir::Dir_CW : TMotorDir::Dir_CCW;
+    delay(5000);
+
+    SetMotorState(TMotorState::Start);
 }
 
 void Stop(void)
