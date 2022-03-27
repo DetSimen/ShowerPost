@@ -66,11 +66,10 @@ public:
 	}
 
 	void SetDirection(const TMotorDir ADir) {
+
 		if (FMotorDir == ADir) return;
 		FMotorDir = ADir;
-		bool running = isOn();
-		Off();
+
 		digitalWrite(FpinDIR, static_cast<bool>(FMotorDir));
-		if (running) On();
 	}
 };

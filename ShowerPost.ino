@@ -1210,15 +1210,23 @@ void StopMotor(void) {
 
 void BrakeMotor() {
 
-    for (uint16_t rpm = CurrentRPM; rpm > MOTOR_MIN_RPM; rpm -= MOTOR_DELTA_RPM) {
+    uint16_t delta;
+
+    if (CurrentRPM > 100)
+        delta = CurrentRPM / 10;
+    else
+        delta = 10;
+
+    for (uint16_t rpm = CurrentRPM; rpm > MOTOR_MIN_RPM; rpm -= delta) {
         MotorTimer.SetRPM(rpm);
         delay(100);
     }
 
-    SetMotorState(TMotorState::Pause);
+    SetMotorState(TMotorState::Pause); 
 
     MotorDir = (MotorDir == TMotorDir::Dir_CCW) ? TMotorDir::Dir_CW : TMotorDir::Dir_CCW;
-    delay(5000);
+    printf("Dir changed to %d\n", uint8_t(MotorDir));
+    delay(1000);
 
     SetMotorState(TMotorState::Start);
 }
