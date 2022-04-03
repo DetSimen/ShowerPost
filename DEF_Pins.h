@@ -22,6 +22,10 @@ constexpr uint8_t PIN_SCL				= A5;   // I2C Clock DS3231
 constexpr uint8_t PIN_SDA				= A4;   // I2C Data DS3231
 constexpr uint8_t PIN_BEEPER			= A3;   // Зуммер, + на пин А3, минус на GND
 
+constexpr uint8_t PIN_MOTOR_EN = 10;            // Пин ENABLE драйвера Т6600 
+constexpr uint8_t PIN_MOTOR_DIR = 11;			// Пин DIRECTION драйвера Т6600 
+constexpr uint8_t PIN_MOTOR_STEP = 9;			// Пин STEP драйвера Т6600 
+
 
 constexpr uint8_t PIN_R_ENCODER_LEFT	= 4;    // пин направления влево правого энкодера
 constexpr uint8_t PIN_R_ENCODER_RIGHT	= 5;    // пин направления вправо правого энкодера
