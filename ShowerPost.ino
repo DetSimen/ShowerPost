@@ -248,27 +248,32 @@ TDownCounter AppTimer;
 
 #pragma region Hand Mode
 
-enum class THandMode: uint8_t {Timer=0, Rotate=1}; // Отображение на экранчике, RPM или таймер
+enum class THandDisplayMode: uint8_t {Timer=0, Rotate=1}; // Отображение на экранчике, RPM или таймер
 
 
-constexpr uint16_t MOTOR_MIN_RPM    = 50;       // минимальные обороты двигателя
+constexpr uint16_t MOTOR_MIN_RPM    = 100;       // минимальные обороты двигателя
 constexpr uint16_t MOTOR_MAX_RPM    = 1500;     // максимальные обороты, которые можно выставить
 constexpr uint16_t MOTOR_DELTA_RPM  = 10;       // шаг увеличения оборотов энкодером
 
-constexpr uint16_t HAND_TIMER_DEFAULT = 30;   // Таймер  по умолчанию 30 секунд 
-constexpr uint16_t HAND_ROTATE_DEFAULT = MOTOR_MIN_RPM;   // Обороты по умолчанию минимальные
+constexpr uint16_t HAND_TIMER_DEFAULT   = 30;   // Таймер  по умолчанию 30 секунд 
+constexpr uint16_t HAND_DELTA_TIMER     = 10;
 
-constexpr uint32_t HAND_ANIMATED_TIME = 10;     // время в мс между увеличением/уменьшением частоты ШД
+constexpr uint32_t HAND_ANIMATED_TIME   = 90;  // время в мс между увеличением/уменьшением частоты ШД
+constexpr uint32_t HAND_INC_DELTA_RPM   = 50;   // шаг увеличения частоты при разгоне
+constexpr uint16_t HAND_DEC_DELTA_RPM   = 100;   // шаг уменьшения оборотов при торможении
+
 THandle hHandTimer = INVALID_HANDLE;            // таймер ШД
 
+THandDisplayMode HandMode = THandDisplayMode::Timer; // режим отображения экрана, по умолчанию - таймер
 
-THandMode HandMode = THandMode::Timer;          // режим отображения экрана, по умолчанию - таймер
-
-uint16_t  CurrentRPM = MOTOR_MIN_RPM;           // начальная установка оборотов при старте программы (мин)
+uint16_t  EstimatedRPM = 100;                   // начальная установка оборотов при старте программы (мин)
+uint16_t  CurrentRPM   = MOTOR_MIN_RPM;
 
 TDriver6600 Motor(PIN_MOTOR_DIR, PIN_MOTOR_STEP, PIN_MOTOR_EN);// обьект мотор - параметры пины драйвера
 
-enum class TMotorState: uint8_t {Unknown, Running, Start, Stop, Braking, Pause};// все возможные состояния мотора 
+enum class TMotorState: uint8_t {Unknown, Running, Start, Stop, Braking};// все возможные состояния мотора 
+
+bool HandTimerPaused = false;
 
 TMotorState MotorState = TMotorState::Unknown;  // начальное состояние при старте программы
 TMotorDir   MotorDir = TMotorDir::Dir_CW;       // начальное направление вращения (по часовой)
@@ -291,7 +296,9 @@ void StopHeating(void);     // функция выключения нагрев�
 void tmrOneChanged(void);   // функция таймера мотора, переключает ногу STEP 0->1->0...
 void StartMotor(void);      // функция запуска мотора
 void StopMotor(void);       // функция остановки мотора
-void BrakeMotor(void);      // функция торможения мотора (прототип)
+//void BrakeMotor(void);      // функция торможения мотора (прототип)
+void IncRPM(void);          // плавный старт мотора 
+void DecRPM(void);          // плавное торможение мотора
 
 TTimerOne MotorTimer(tmrOneChanged);  // таймер мотора
 
@@ -386,12 +393,12 @@ void Display() {
     case TAppState::Hand: {
          switch (HandMode)
             {
-            case THandMode::Timer:
+            case THandDisplayMode::Timer:
                 DisplayTimer(TimerCurrentValue);
                 break;
-            case THandMode::Rotate:
-                Disp.Print(CurrentRPM);
-                if (CurrentRPM<1000) Disp.PrintAt(0, 'r');
+            case THandDisplayMode::Rotate:
+                Disp.Print(EstimatedRPM);
+                if (EstimatedRPM<1000) Disp.PrintAt(0, 'r');
                 break;
             default:
                 break;
@@ -426,8 +433,10 @@ void Display() {
         }
         break;
     }
+
     case TAppState::Prog2:
         break;
+
     case TAppState::Heat: {
 
         if (HeaterMode == THeaterMode::Temp) Disp.PrintDeg(CurrentTemperature);
@@ -484,8 +493,11 @@ void DisplayTimer(const uint16_t AValue) {
     }
 
     if (TimerState == THeatTimerState::Pause) {
-       if(!SetupMode) Disp.PrintAt(0, 'P');
+        if (!SetupMode) Disp.PrintAt(0, 'P');
     }
+
+    if (AppState == TAppState::Hand && HandTimerPaused)
+        if (!SetupMode) Disp.PrintAt(0, 'P');
 
     Disp.ShowPoint(true);
 
@@ -598,9 +610,9 @@ void SetAppState(const TAppState ANewAppState)
         break;
 
     case TAppState::Hand:
-        CurrentRPM = MOTOR_MIN_RPM;
+        EstimatedRPM = 460; // MOTOR_MIN_RPM;
         TimerCurrentValue = HAND_TIMER_DEFAULT;
-        HandMode = THandMode::Timer;
+        HandMode = THandDisplayMode::Timer;
         break;
 
     case TAppState::Error: {
@@ -656,24 +668,39 @@ void SetMotorState(const TMotorState ANewState)
 
     switch (MotorState)
     {
-    case TMotorState::Start:
-        HandMode = THandMode::Timer;
-        StartMotor();
+    case TMotorState::Running: 
+        Motor.SetDirection(MotorDir);
+        Motor.On();
+        CurrentRPM = MOTOR_MIN_RPM;
+        MotorTimer.Run(CurrentRPM);
+        Timers.SetNewInterval(hHandTimer, HAND_ANIMATED_TIME);
+        break;
+
+    case TMotorState::Start:        
+        Timers.Stop(hHandTimer);
         AppTimer.Run(TimerCurrentValue);
+        if (HandMode != THandDisplayMode::Timer) {
+            HandMode = THandDisplayMode::Timer;
+            Display();
+        }
         break;
+
+
     case TMotorState::Stop:
+        Timers.Stop(hHandTimer);
+        Motor.Off();
+        MotorTimer.Stop();
         AppTimer.Stop();
-        TimerCurrentValue = HAND_TIMER_DEFAULT;
-        CurrentRPM = HAND_ROTATE_DEFAULT;
-        Display();
-        StopMotor();
+        if (!HandTimerPaused) {
+            TimerCurrentValue = HAND_TIMER_DEFAULT;
+            Display();
+        }
         break;
-    case TMotorState::Pause:
-        StopMotor();
-        break;
-    case TMotorState::Running:
+
     case TMotorState::Braking:
+        Timers.SetNewInterval(hHandTimer, HAND_ANIMATED_TIME);
         break;
+
     default:
         StopMotor();
         break;
@@ -774,7 +801,8 @@ void Dispatch(const TMessage& Msg) {
         }
 
         if (Msg.LoParam == hHandTimer) {
-            Timers.Stop(hHandTimer);
+            if (MotorState == TMotorState::Running) IncRPM();
+            if (MotorState == TMotorState::Braking) DecRPM();
         }
         break;
     }
@@ -831,13 +859,16 @@ void Dispatch(const TMessage& Msg) {
         break;
 
     case msg_CounterEnd: {
-        if (MotorState == TMotorState::Start) SetMotorState(TMotorState::Stop);
+        AppTimer.Stop();
+        if (MotorState == TMotorState::Start) SetMotorState(TMotorState::Braking);
         TimerCurrentValue = TIMER_DEFAULT;
+        Display();
         break;
     }
+ 
     case msg_CounterTick: {
-        TimerCurrentValue--;
-        Display();
+         TimerCurrentValue--;
+         Display();
         break;
     }
 
@@ -876,9 +907,11 @@ void Dispatch(const TMessage& Msg) {
         }
 
         if (AppState == TAppState::Hand && (!SetupMode)) {
-            if (MotorState == TMotorState::Stop) SendMessage(msg_SetMotorState, uint8_t(TMotorState::Start));
-            if (MotorState == TMotorState::Start || MotorState==TMotorState::Pause) 
-                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Stop));
+            if (MotorState == TMotorState::Stop) SendMessage(msg_SetMotorState, uint8_t(TMotorState::Running));
+            if (MotorState == TMotorState::Start) {
+                HandTimerPaused = false;
+                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Braking));
+            }
         }
         break;
     }
@@ -905,10 +938,15 @@ void Dispatch(const TMessage& Msg) {
         }
  
         if (AppState == TAppState::Hand && (!SetupMode)) {
-            if (MotorState == TMotorState::Start)
-                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Pause));
-            if (MotorState == TMotorState::Pause)
-                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Start));
+            if (MotorState == TMotorState::Start) {
+                AppTimer.Pause();
+                HandTimerPaused = true;
+                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Braking));
+            }
+            if ((MotorState == TMotorState::Stop) && HandTimerPaused) {
+                HandTimerPaused = false;
+                SendMessage(msg_SetMotorState, uint8_t(TMotorState::Running));
+            }
         }
         break;
     }
@@ -922,10 +960,10 @@ void Dispatch(const TMessage& Msg) {
                 SendMessage(msg_NextHeatState);
         }
         if (AppState == TAppState::Hand) {
-            if (HandMode == THandMode::Timer)
-                HandMode = THandMode::Rotate;
+            if (HandMode == THandDisplayMode::Timer)
+                HandMode = THandDisplayMode::Rotate;
             else
-                HandMode = THandMode::Timer;
+                HandMode = THandDisplayMode::Timer;
             Display();
         }
 
@@ -999,18 +1037,16 @@ void Dispatch(const TMessage& Msg) {
 
     case msg_Rotate: {
         
-        int delta = int(Msg.LoParam);
-        delta *= MOTOR_DELTA_RPM;
 
         if (SetupMode) {
-            if (HandMode == THandMode::Rotate) {
-                CurrentRPM += delta;
-                if (CurrentRPM < MOTOR_MIN_RPM) CurrentRPM = MOTOR_MIN_RPM;
-                if (CurrentRPM > MOTOR_MAX_RPM) CurrentRPM = MOTOR_MAX_RPM;
-                MotorTimer.SetRPM(CurrentRPM);
+            if (HandMode == THandDisplayMode::Rotate) {
+                int8_t delta = Msg.LoParam * MOTOR_DELTA_RPM;
+                EstimatedRPM += delta;
+                if (EstimatedRPM < MOTOR_MIN_RPM) EstimatedRPM = MOTOR_MIN_RPM;
+                if (EstimatedRPM > MOTOR_MAX_RPM) EstimatedRPM = MOTOR_MAX_RPM;
             }
-            if (HandMode == THandMode::Timer) {
-                TimerCurrentValue += delta;
+            if (HandMode == THandDisplayMode::Timer) {
+                TimerCurrentValue += int(Msg.LoParam) * HAND_DELTA_TIMER;
                 if (TimerCurrentValue < HAND_TIMER_DEFAULT) TimerCurrentValue = HAND_TIMER_DEFAULT;
                 if (TimerCurrentValue > MAX_MINUTE)
                     TimerMode = TTimerMode::Minutes;
@@ -1019,13 +1055,7 @@ void Dispatch(const TMessage& Msg) {
             }
         }
         else {
-            if (MotorState == TMotorState::Start) {
-                CurrentRPM += delta;
-                if (CurrentRPM < MOTOR_MIN_RPM) CurrentRPM = MOTOR_MIN_RPM;
-                if (CurrentRPM > MOTOR_MAX_RPM) CurrentRPM = MOTOR_MAX_RPM;
-                MotorTimer.SetRPM(CurrentRPM);
-                HandMode = THandMode::Rotate;
-            }
+
         }
 
         Display();
@@ -1197,10 +1227,6 @@ void Dispatch(const TMessage& Msg) {
         break;
     }
 
-    case msg_MotorChangeDir: {
-        BrakeMotor();
-        break;
-    }
 
     default: // если мы пропустили какое сообщение, этот блок выведет в сериал его номер и параметры
         printf("Unhandled message 0x%X, Lo = 0x%X, Hi = 0x%X\n", Msg.Message, Msg.LoParam, Msg.HiParam);
@@ -1209,13 +1235,7 @@ void Dispatch(const TMessage& Msg) {
 }
 
 void StartMotor() {
-    if (Motor.isOn()) return;
 
-    Motor.SetDirection(MotorDir);
-
-    uint16_t deltaRPM = (CurrentRPM - MOTOR_MIN_RPM) / 10;
-
-    if (deltaRPM == 0) deltaRPM = 10;
 
     uint16_t rpm = MOTOR_MIN_RPM;
 
@@ -1223,13 +1243,8 @@ void StartMotor() {
 
     Motor.On();
 
-    while (rpm < CurrentRPM) {
-        delay(50);
-        MotorTimer.SetRPM(rpm);
-        rpm += deltaRPM;
-    }
 
-    MotorTimer.SetRPM(CurrentRPM);
+//    MotorTimer.SetRPM(CurrentRPM);
 }
 
 void StopMotor(void) {
@@ -1238,28 +1253,28 @@ void StopMotor(void) {
     MotorTimer.Stop();
 }
 
-void BrakeMotor() {
-
-    uint16_t delta;
-
-    if (CurrentRPM > 100)
-        delta = CurrentRPM / 10;
-    else
-        delta = 10;
-
-    for (uint16_t rpm = CurrentRPM; rpm > MOTOR_MIN_RPM; rpm -= delta) {
-        MotorTimer.SetRPM(rpm);
-        delay(20);
+void DecRPM(void) {
+    uint16_t minrpm = MOTOR_MIN_RPM + HAND_DEC_DELTA_RPM;
+    CurrentRPM -= HAND_DEC_DELTA_RPM;
+    if (CurrentRPM < minrpm) {
+        CurrentRPM = MOTOR_MIN_RPM;
+        SendMessage(msg_SetMotorState, uint8_t(TMotorState::Stop));
     }
+    MotorTimer.SetRPM(CurrentRPM);
 
-    SetMotorState(TMotorState::Pause); 
-
-    MotorDir = (MotorDir == TMotorDir::Dir_CCW) ? TMotorDir::Dir_CW : TMotorDir::Dir_CCW;
-    printf("Dir changed to %d\n", uint8_t(MotorDir));
-    delay(1000);
-
-    SetMotorState(TMotorState::Start);
 }
+
+void IncRPM(void)
+{
+    CurrentRPM += HAND_INC_DELTA_RPM;
+
+    if (CurrentRPM > EstimatedRPM) {
+        CurrentRPM = EstimatedRPM;
+        SendMessage(msg_SetMotorState, uint8_t(TMotorState::Start));
+    }
+    MotorTimer.SetRPM(CurrentRPM);
+}
+
 
 void Stop(void)
 {

@@ -56,7 +56,12 @@ public:
 		if (runAfter) Start();
 	}
 	
-	inline	void Run() { Run(FInitValue); }
+	inline	void Run() {
+		if (FCounter > 0)
+			Run(FCounter);
+		else
+			Run(FInitValue); 
+	}
 			
 	void Run(const uint16_t ATimeToRun) {
 		if (FInitValue != ATimeToRun) FInitValue = ATimeToRun;

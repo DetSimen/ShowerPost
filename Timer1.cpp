@@ -53,7 +53,6 @@ TTimerOne::TTimerOne(PTimer1EventFunc ACompA, PTimer1EventFunc ACompB)
 	TimerOne = this;
 }
 
-
 void TTimerOne::CompA(void)
 {
 	TCNT1 = 0;
